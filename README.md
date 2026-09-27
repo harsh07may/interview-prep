@@ -1,4 +1,4 @@
-# Interview prep
+# PrepOps
 
 Interview preparation tracks with answers you can say out loud, the follow-ups that usually come next, and the traps that catch most candidates. Written for developers interviewing in India.
 

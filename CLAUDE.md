@@ -4,7 +4,7 @@ Everything needed to understand, edit and publish this repository. Read it fully
 
 ## What this repo is
 
-Interview preparation tracks plus a landing page, served as a static site on GitHub Pages. No build step, no framework, no package manager: every page is one self-contained HTML file.
+Interview preparation tracks plus a landing page, served as a static site on GitHub Pages. No build step, no framework, no package manager: every page is one self-contained HTML file. The site is called PrepOps; the repo and its URL keep the name `interview-prep`.
 
 | Path | What it is | localStorage key |
 |---|---|---|
