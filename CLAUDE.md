@@ -10,10 +10,11 @@ Interview preparation tracks plus a landing page, served as a static site on Git
 |---|---|---|
 | `index.html` | Landing page: bento grid linking to all tracks | none (reads each track's source to count questions) |
 | `aspnet-core/index.html` | ASP.NET Core track, 8 topics, about 180 questions | `aspnet:level:v1` (selected level filter) |
+| `dsa/index.html` | DSA patterns track: 7 stages, 25 patterns, 285 problems, Python | `dsa:done:v1` (array of solved problem slugs) |
 | `README.md` | Public description | |
 | `.nojekyll` | Tells GitHub Pages to serve files as-is. Do not delete. | |
 
-Planned tracks: `dsa/`, `react-typescript/`, `system-design/`. They appear on the landing page as dashed "Planned" tiles until they exist.
+Planned tracks: `react-typescript/`, `system-design/`. They appear on the landing page as dashed "Planned" tiles until they exist.
 
 All sites under `harsh07may.github.io` share one browser origin, so every localStorage key must be namespaced by track (`aspnet:`, `dsa:`, ...).
 
@@ -57,6 +58,25 @@ Content is data, not markup. The script at the bottom of each track declares one
 3. Add a link to the progress track `<nav class="track">` and update the track note.
 4. Update the landing page chips and the "N topics" text.
 
+## How the DSA page works
+
+Unlike the ASP.NET Core page, `dsa/index.html` is plain static markup, not rendered from a data array. Its structure:
+
+- **Stages** are `<section class="block stage" id="stage-N" data-stage>`, with a `.stage-progress` line filled in by script. The stage track in the header links to `#stage-0` to `#stage-6`; the curriculum map cards use `#map-0` to `#map-6`.
+- **Patterns** are `<section class="pattern" id="p-..." data-pattern>` containing `.pt-what`, two `.pt-box` panels (recognition cues, variations), `.pt-intuition`, a Python template in `<pre><code class="language-python">`, and problems grouped under `h4.grp` headings (Canonical, Variations, Combinations and stretch).
+- **Problems** are `<li class="prob" data-id="leetcode-slug">`. The `data-id` is the LeetCode URL slug and is the progress key, so never change one after publishing: people's ticks would silently disappear. Every slug must be unique on the page.
+- Each problem shows why it's included (`.p-why`), pattern tags, an optional "Solve first" line, and a collapsed `details.p-insight` key insight. Stage 6 problems (`li.prob.mixed`) have a Hint and a "Reveal the pattern" disclosure instead, and no tags.
+- Background material (how the sheet was built, the resource comparison, sources) lives in the collapsed `#about` section at the end. Keep anything not used while practising in collapsible sections.
+- Syntax highlighting: highlight.js 11.9.0 from cdnjs, with token colours written inline in the page's CSS.
+
+### DSA content rules
+
+1. Free problems only. Replace LeetCode Premium problems with a free equivalent, and say so in the key insight if the free one differs (for example, closed versus half-open intervals).
+2. Every problem must add something: the canonical form, a variation, an edge case, a combination, or a real step up in difficulty. Don't add near-duplicates.
+3. "Why it's included" must not give away the solution; the approach belongs in the key insight.
+4. Test before publishing. Run every template, and check every non-trivial key insight against a brute-force solution on random small inputs. When a check fails, find out whether the insight or the test is wrong before changing either.
+5. Keep Python idiomatic and version-aware: note when something needs Python 3.10+ (`pairwise`, `bit_count`) or 3.14 (`heapq` max-heap functions), and call out Python-specific traps such as the recursion limit and unbounded integers.
+
 ## Creating a new track
 
 1. Copy `aspnet-core/index.html` to `new-track/index.html`.
@@ -86,7 +106,10 @@ Track colours are defined in the landing page: `--t-dotnet`, `--t-dsa`, `--t-rea
 
 ```bash
 # 1. HTML parses
-python3 -c "import html.parser; [html.parser.HTMLParser().feed(open(f).read()) for f in ['index.html','aspnet-core/index.html']]; print('html ok')"
+python3 -c "import html.parser; [html.parser.HTMLParser().feed(open(f).read()) for f in ['index.html','aspnet-core/index.html','dsa/index.html']]; print('html ok')"
+
+# 1b. No duplicate DSA problem ids (prints nothing when clean)
+grep -o 'data-id="[^"]*"' dsa/index.html | sort | uniq -d
 
 # 2. The track's script has valid syntax (needs Node)
 python3 -c "import re; s=open('aspnet-core/index.html').read(); open('/tmp/track.js','w').write(re.findall(r'<script>(.*?)</script>', s, re.S)[0])" && node --check /tmp/track.js && echo "script ok"
@@ -98,7 +121,7 @@ grep -rn "claude.ai/artifact" --include=*.html --include=*.md --exclude=CLAUDE.m
 python3 -m http.server 8000
 ```
 
-Then check by eye: every topic renders, the level filter and "Open all answers" work, light and dark mode, and a phone-width window. A runtime error (for example an undefined source constant) leaves the page empty below the toolbar, so always open the page after editing.
+Then check by eye: every topic renders, the level filter and "Open all answers" work, DSA ticks survive a reload, light and dark mode, and a phone-width window. A runtime error (for example an undefined source constant) leaves the page empty below the toolbar, so always open the page after editing.
 
 ## Publishing
 
@@ -112,4 +135,4 @@ git push
 
 GitHub Pages redeploys within a few minutes (Actions tab, "pages build and deployment"). Settings → Pages should say "Deploy from a branch: main, / (root)".
 
-If the repo is renamed, update the Source links in `index.html`, `aspnet-core/index.html` and `README.md`.
+If the repo is renamed, update the Source links in `index.html`, `aspnet-core/index.html` and `README.md`. The landing page counts each track's questions or problems by fetching its page, so it shows live numbers over http and the static fallback numbers when opened from disk.
