@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Interview prep: .NET, DSA, React and system design</title>
+<meta name="description" content="Interview preparation tracks with answers you can say out loud, written for developers interviewing in India.">
+<meta property="og:title" content="Interview prep">
+<meta property="og:description" content="Interview preparation tracks with answers you can say out loud, written for developers interviewing in India.">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎯</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+  --bg:#F7F6FB; --surface:#FFFFFF; --ink:#1D1A2B; --muted:#5E5A72; --line:#E4E0EE;
+  --fresher:#1F7A52; --mid:#B86E00; --senior:#9A2A66;
+  /* one accent per track */
+  --t-dotnet:#512BD4; --t-dotnet-soft:#ECE6FD;
+  --t-dsa:#0F7B6C;    --t-dsa-soft:#DDF3EF;
+  --t-react:#2D6CB5;  --t-react-soft:#E1ECF8;
+  --t-sys:#B5541B;    --t-sys-soft:#FBE9DD;
+  --on-acc:#FFFFFF;
+  --display:"Bricolage Grotesque","Segoe UI",system-ui,sans-serif;
+  --body:"Atkinson Hyperlegible","Segoe UI",system-ui,sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#15131F; --surface:#1E1B2C; --ink:#ECEAF5; --muted:#A7A2BD; --line:#2F2A42;
+    --fresher:#6FD3A3; --mid:#F2B45C; --senior:#F08BC0;
+    --t-dotnet:#A08BFF; --t-dotnet-soft:#2A2446;
+    --t-dsa:#4FD1BC;    --t-dsa-soft:#14332E;
+    --t-react:#7FB0EE;  --t-react-soft:#172A40;
+    --t-sys:#F29A62;    --t-sys-soft:#3A2416;
+    --on-acc:#15131F;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#15131F; --surface:#1E1B2C; --ink:#ECEAF5; --muted:#A7A2BD; --line:#2F2A42;
+  --fresher:#6FD3A3; --mid:#F2B45C; --senior:#F08BC0;
+  --t-dotnet:#A08BFF; --t-dotnet-soft:#2A2446;
+  --t-dsa:#4FD1BC;    --t-dsa-soft:#14332E;
+  --t-react:#7FB0EE;  --t-react-soft:#172A40;
+  --t-sys:#F29A62;    --t-sys-soft:#3A2416;
+  --on-acc:#15131F;
+}
+*,*::before,*::after{box-sizing:inherit}
+body{margin:0;background:var(--bg);color:var(--ink);font:400 17px/1.55 var(--body);-webkit-font-smoothing:antialiased}
+a{color:inherit}
+:focus-visible{outline:3px solid var(--t-dotnet);outline-offset:3px;border-radius:8px}
+
+.wrap{max-width:1100px;margin:0 auto;padding:clamp(28px,6vw,72px) clamp(18px,4vw,40px) 56px}
+.bento{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:14px}
+.tile{background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:26px 28px;min-width:0}
+
+/* Intro */
+.intro{grid-column:1 / -1;background:transparent;border:0;padding:0 4px 20px}
+.intro h1{font-family:var(--display);font-weight:800;font-size:clamp(44px,8vw,88px);line-height:.95;letter-spacing:-.045em;margin:0 0 16px}
+.intro p{color:var(--muted);font-size:19px;max-width:56ch;margin:0}
+
+/* Live track */
+.track{--acc:var(--t-dotnet);--soft:var(--t-dotnet-soft);grid-column:span 4;grid-row:span 3;display:flex;flex-direction:column;position:relative;overflow:hidden}
+.track::before{content:"";position:absolute;inset:0 0 auto 0;height:6px;background:var(--acc)}
+.kicker{font-weight:700;color:var(--acc);font-size:15px;margin:4px 0 8px}
+.track h2{font-family:var(--display);font-weight:800;font-size:clamp(34px,5vw,56px);line-height:1;letter-spacing:-.035em;margin:0 0 12px}
+.track .blurb{color:var(--muted);margin:0 0 22px;max-width:52ch}
+.topics{list-style:none;margin:0 0 26px;padding:0;display:flex;flex-wrap:wrap;gap:8px}
+.topics a{display:inline-block;text-decoration:none;font-size:14.5px;padding:6px 12px;border-radius:999px;background:var(--soft);color:var(--ink)}
+.topics a:hover{background:var(--acc);color:var(--on-acc)}
+
+.mix{margin-top:auto}
+.mix-bar{display:flex;height:14px;border-radius:7px;overflow:hidden;gap:3px;margin:0 0 12px}
+.mix-bar span{display:block;height:100%;border-radius:4px}
+.mix-legend{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:14.5px;color:var(--muted);margin:0 0 22px;padding:0;list-style:none}
+.mix-legend b{color:var(--ink)}
+.mix-legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:0}
+.cta-row{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.cta{display:inline-block;text-decoration:none;font-weight:700;background:var(--acc);color:var(--on-acc);padding:12px 20px;border-radius:12px}
+.cta:hover{filter:brightness(1.08)}
+.total{color:var(--muted);font-size:15px;margin:0}
+
+/* Planned tracks */
+.planned{grid-column:span 2;border-style:dashed;background:transparent;display:flex;flex-direction:column;gap:6px}
+.planned.dsa{--acc:var(--t-dsa);--soft:var(--t-dsa-soft)}
+.planned.react{--acc:var(--t-react);--soft:var(--t-react-soft)}
+.planned.sys{--acc:var(--t-sys);--soft:var(--t-sys-soft)}
+.planned .tag{align-self:flex-start;font-size:13px;font-weight:700;color:var(--acc);background:var(--soft);padding:3px 10px;border-radius:999px;margin:0 0 6px}
+.planned h2{font-family:var(--display);font-weight:700;font-size:23px;line-height:1.15;letter-spacing:-.015em;margin:0}
+.planned p{margin:0;color:var(--muted);font-size:15.5px}
+
+/* Notes */
+.note{grid-column:span 2}
+.note h3{font-family:var(--display);font-size:18px;margin:0 0 6px;letter-spacing:-.01em}
+.note p{margin:0;color:var(--muted);font-size:15.5px}
+
+footer{margin-top:28px;color:var(--muted);font-size:14.5px;padding:0 4px}
+
+@media (max-width:980px){
+  .track{grid-column:1 / -1;grid-row:auto}
+  .planned{grid-column:span 3}
+  .planned.sys{grid-column:1 / -1}
+}
+@media (max-width:680px){
+  .planned,.planned.sys,.note{grid-column:1 / -1}
+  .tile{padding:22px 20px}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<main class="wrap">
+  <div class="bento">
+    <header class="tile intro">
+      <h1>Interview prep</h1>
+      <p>Commonly asked questions with answers you can say out loud, the follow-ups that come next, and the traps that catch most candidates. Written for developers interviewing in India.</p>
+    </header>
+
+    <!-- Live track. Copy this block for a new track and change --acc/--soft, data-src and the links. -->
+    <section class="tile track" data-src="aspnet-core/" aria-labelledby="t-dotnet">
+      <p class="kicker">.NET backend</p>
+      <h2 id="t-dotnet">ASP.NET Core</h2>
+      <p class="blurb">From middleware and DI lifetimes to EF Core, REST, auth, caching, and microservices, plus a guide to how service, GCC, and product-company rounds run.</p>
+      <ul class="topics">
+        <li><a href="aspnet-core/#fundamentals">Fundamentals</a></li>
+        <li><a href="aspnet-core/#csharp">C# and OOP</a></li>
+        <li><a href="aspnet-core/#efcore-sql">EF Core and SQL</a></li>
+        <li><a href="aspnet-core/#rest-api">REST APIs</a></li>
+        <li><a href="aspnet-core/#auth">Auth</a></li>
+        <li><a href="aspnet-core/#perf-security">Performance and security</a></li>
+        <li><a href="aspnet-core/#beyond">Beyond the basics</a></li>
+        <li><a href="aspnet-core/#guide">Interview guide</a></li>
+      </ul>
+      <div class="mix">
+        <div class="mix-bar" role="img" aria-label="Questions by level: 65 fresher, 92 mid, 23 senior">
+          <span data-level="fresher" style="background:var(--fresher);flex:65"></span>
+          <span data-level="mid" style="background:var(--mid);flex:92"></span>
+          <span data-level="senior" style="background:var(--senior);flex:23"></span>
+        </div>
+        <ul class="mix-legend">
+          <li><i style="background:var(--fresher)"></i><b data-count="fresher">65</b> fresher</li>
+          <li><i style="background:var(--mid)"></i><b data-count="mid">92</b> mid</li>
+          <li><i style="background:var(--senior)"></i><b data-count="senior">23</b> senior</li>
+        </ul>
+        <div class="cta-row">
+          <a class="cta" href="aspnet-core/">Start practising</a>
+          <p class="total"><span data-count="total">180</span> questions across 8 topics</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="tile planned dsa">
+      <span class="tag">Planned</span>
+      <h2>Data structures and algorithms</h2>
+      <p>Patterns for the coding round, solved in C#.</p>
+    </section>
+    <section class="tile planned react">
+      <span class="tag">Planned</span>
+      <h2>React and TypeScript</h2>
+      <p>Hooks, rendering, state, and the type system.</p>
+    </section>
+    <section class="tile planned sys">
+      <span class="tag">Planned</span>
+      <h2>System design</h2>
+      <p>Designing for scale, step by step.</p>
+    </section>
+
+    <section class="tile note">
+      <h3>How to practise</h3>
+      <p>Answer each question aloud before opening it. Filter to your level, then skim one level above.</p>
+    </section>
+    <section class="tile note">
+      <h3>Where answers come from</h3>
+      <p>Every answer says whether it's backed by a linked source or is a widely reported pattern.</p>
+    </section>
+    <section class="tile note">
+      <h3>Source</h3>
+      <p>Plain HTML, no build step. <a href="https://github.com/harsh07may/interview-prep">View the repository</a>.</p>
+    </section>
+  </div>
+  <footer>Framework details target .NET 8 and .NET 10, checked in September 2026.</footer>
+</main>
+
+<script>
+// Refresh the level counts from the live page. If the fetch fails (for example when
+// the file is opened from disk), the static numbers in the markup stay.
+document.querySelectorAll(".track[data-src]").forEach(async (tile) => {
+  try {
+    const res = await fetch(tile.dataset.src);
+    if (!res.ok) return;
+    const src = await res.text();
+    const count = (lvl) => (src.match(new RegExp('level:"' + lvl + '"', "g")) || []).length;
+    const n = { fresher: count("fresher"), mid: count("mid"), senior: count("senior") };
+    n.total = n.fresher + n.mid + n.senior;
+    if (!n.total) return;
+    tile.querySelectorAll("[data-count]").forEach((el) => { el.textContent = n[el.dataset.count]; });
+    tile.querySelectorAll(".mix-bar [data-level]").forEach((el) => { el.style.flex = String(n[el.dataset.level] || 0); });
+    tile.querySelector(".mix-bar").setAttribute("aria-label",
+      `Questions by level: ${n.fresher} fresher, ${n.mid} mid, ${n.senior} senior`);
+  } catch (e) { /* keep static values */ }
+});
+</script>
+</body>
+</html>
