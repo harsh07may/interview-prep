@@ -48,6 +48,7 @@ Content is data, not markup. The script at the bottom of each track declares one
 ```
 
 - `code` is inserted with `textContent`, so write it raw. Code inside `a` is HTML, so escape it (`&lt;`, `&gt;`, `&amp;`).
+- Every `pre code` block is highlighted by highlight.js 11.9.0 (cdnjs). `langFor()` in the last script picks the language: SQL if it starts with `--`, `SELECT` or `WITH`; plain text for table schemas like `Employees(Id, Name)`, numbered or bulleted lists and route lists; C# otherwise. If a new kind of snippet comes out wrongly coloured, extend `langFor()`.
 - `predict:true` cards put the `code` (a snippet, schema, or prompt) up front and hide `a`. Use them for output prediction, query writing, code review, and scenarios.
 - Source-link constants (like `CWM`, `SQLQ`) are defined once near the top of the script. Define a constant before any topic uses it; an undefined one stops the whole page rendering.
 

@@ -129,6 +129,17 @@ details.q[open] .chev{transform:rotate(180deg);color:var(--accent)}
 .label{font-weight:700}
 pre{background:var(--code-bg);color:var(--code-ink);font-family:var(--mono);font-size:.84rem;line-height:1.55;padding:16px 18px;border-radius:12px;overflow-x:auto;margin:14px 0 0}
 pre code{background:none;color:inherit;padding:0;font-size:inherit}
+/* Syntax highlighting (highlight.js tokens; code blocks are dark in both themes) */
+.hljs-keyword,.hljs-built_in.hljs-keyword{color:#C792EA}
+.hljs-string{color:#B5E08C}
+.hljs-number,.hljs-literal{color:#F5A97F}
+.hljs-comment{color:#A29DB8;font-style:italic}
+.hljs-title.function_,.hljs-title{color:#82AAFF}
+.hljs-title.class_,.hljs-built_in,.hljs-type{color:#FFCB6B}
+.hljs-meta{color:#F78C6C}
+.hljs-attr,.hljs-variable{color:#F0C6FF}
+.hljs-params,.hljs-subst{color:inherit}
+.hljs-operator{color:#89DDFF}
 .trap{background:var(--trap-bg);border-left:4px solid var(--trap-line);padding:12px 14px;border-radius:0 10px 10px 0;margin:14px 0 0}
 .trap p{margin:0}
 .src{font-size:.85rem;color:var(--muted)}
@@ -2492,6 +2503,29 @@ toTop.addEventListener('click', () => {
   const first = document.querySelector('.hero h1');
   if (first) { first.setAttribute('tabindex', '-1'); first.focus({ preventScroll: true }); }
 });
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>
+// Highlight every code block. The language is picked here rather than auto-detected,
+// because auto-detection misreads short C# snippets. Schemas, route lists and
+// requirement lists stay plain text.
+(function(){
+  if (!window.hljs) return;
+  function langFor(code){
+    const t = code.trimStart();
+    if (/^(--|SELECT\b|WITH\b|INSERT\b|UPDATE\b|DELETE\b)/i.test(t)) return 'sql';
+    if (/^FROM\s+\S+/.test(t) && /\nWORKDIR\b/.test(t)) return 'bash';
+    if (/^(\w+\([^)]*\)\s*(\n|$))+$/.test(t.trimEnd() + '\n')) return null;          // table schemas
+    if (/^(\d+\.|- |Requirements\b|(GET|POST|PUT|PATCH|DELETE)\s)/.test(t)) return null; // prose and route lists
+    return 'csharp';
+  }
+  document.querySelectorAll('pre code').forEach(el => {
+    const lang = langFor(el.textContent);
+    if (!lang) return;
+    el.classList.add('language-' + lang);
+    try { hljs.highlightElement(el); } catch (e) {}
+  });
+})();
 </script>
 </body>
 </html>
