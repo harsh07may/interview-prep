@@ -10,11 +10,12 @@ Interview preparation tracks plus a landing page, served as a static site on Git
 |---|---|---|
 | `index.html` | Landing page: bento grid linking to all tracks | none (reads each track's source to count questions) |
 | `aspnet-core/index.html` | ASP.NET Core track, 8 topics, about 180 questions | `aspnet:level:v1` (selected level filter) |
+| `react-typescript/index.html` | React and TypeScript track: 10 topics, 154 questions, same data-driven format as ASP.NET Core | `react:level:v1` (selected level filter) |
 | `dsa/index.html` | DSA patterns track: 7 stages, 25 patterns, 285 problems, Python | `dsa:done:v1` (array of solved problem slugs) |
 | `README.md` | Public description | |
 | `.nojekyll` | Tells GitHub Pages to serve files as-is. Do not delete. | |
 
-Planned tracks: `react-typescript/`, `system-design/`. They appear on the landing page as dashed "Planned" tiles until they exist.
+Planned tracks: `system-design/`. They appear on the landing page as dashed "Planned" tiles until they exist.
 
 All sites under `harsh07may.github.io` share one browser origin, so every localStorage key must be namespaced by track (`aspnet:`, `dsa:`, ...).
 
@@ -58,6 +59,17 @@ Content is data, not markup. The script at the bottom of each track declares one
 2. Add the topic entry to `topics`.
 3. Add a link to the progress track `<nav class="track">` and update the track note.
 4. Update the landing page chips and the "N topics" text.
+
+### React and TypeScript track differences
+
+`react-typescript/index.html` was copied from the ASP.NET Core page and renders the same way, with these changes:
+
+- Accent is the React blue (`--accent` family plus `--on-accent`, used for text on accent backgrounds).
+- A question can set `lang:"js" | "ts" | "tsx" | "css"`. The last script's `langFor()` reads it from `data-lang` and defaults to TypeScript, which also highlights plain JavaScript and JSX. Set `lang:"js"` on plain JavaScript so it is not presented as TS.
+- The topic list and jump nav are generated from `topics`; the `<nav class="track">` links are still written by hand.
+- Topic 10 (`guide`) is a `custom` topic with the priority table and the 20-item list. Its priorities are editorial, not measured; keep that wording.
+- Source constants (`EFFECT`, `NOEFFECT`, `COMPILER`, `MEMO`, `USEMEMO`, `SYNC`) point at react.dev pages seen only as documentation excerpts. Use `REPORTED` or `REPORTED_REACT` for widely reported patterns, and do not upgrade a label to "Cited" unless the page was actually retrieved.
+- Output-prediction snippets must be run in Node before publishing. TypeScript snippets in topic 6 were type-checked against TypeScript 5.x.
 
 ## How the DSA page works
 
@@ -107,7 +119,7 @@ Track colours are defined in the landing page: `--t-dotnet`, `--t-dsa`, `--t-rea
 
 ```bash
 # 1. HTML parses
-python3 -c "import html.parser; [html.parser.HTMLParser().feed(open(f).read()) for f in ['index.html','aspnet-core/index.html','dsa/index.html']]; print('html ok')"
+python3 -c "import html.parser; [html.parser.HTMLParser().feed(open(f).read()) for f in ['index.html','aspnet-core/index.html','react-typescript/index.html','dsa/index.html']]; print('html ok')"
 
 # 1b. No duplicate DSA problem ids (prints nothing when clean)
 grep -o 'data-id="[^"]*"' dsa/index.html | sort | uniq -d
