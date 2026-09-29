@@ -80,6 +80,7 @@ Unlike the ASP.NET Core page, `dsa/index.html` is plain static markup, not rende
 - **Problems** are `<li class="prob" data-id="leetcode-slug">`. The `data-id` is the LeetCode URL slug and is the progress key, so never change one after publishing: people's ticks would silently disappear. Every slug must be unique on the page.
 - Each problem shows why it's included (`.p-why`), pattern tags, an optional "Solve first" line, and a collapsed `details.p-insight` key insight. Stage 6 problems (`li.prob.mixed`) have a Hint and a "Reveal the pattern" disclosure instead, and no tags.
 - Background material (how the sheet was built, the resource comparison, sources) lives in the collapsed `#about` section at the end. Keep anything not used while practising in collapsible sections.
+- The curriculum map (`#map`) and Prerequisites (`#stage-0`) are collapsed by default: each section's contents sit in a `details.fold` whose `summary` holds the heading and lead. A small script at the end opens a collapsed section when a link or the URL hash points into it (for example `#stage-0` or `#pre-heaps`), so keep that script if you move these sections.
 - Syntax highlighting: highlight.js 11.9.0 from cdnjs, with token colours written inline in the page's CSS.
 
 ### DSA content rules
