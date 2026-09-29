@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>PrepOps: ASP.NET Core and DSA interview prep</title>
+<title>PrepOps: ASP.NET Core, DSA, and React interview prep</title>
 <meta name="description" content="Interview preparation tracks with answers you can say out loud, written for developers interviewing in India.">
 <meta property="og:title" content="PrepOps">
 <meta property="og:description" content="Interview preparation tracks with answers you can say out loud, written for developers interviewing in India.">
@@ -93,6 +93,7 @@ a{color:inherit}
 .planned p{margin:0;color:var(--muted);font-size:15.5px}
 
 .track.dsa{--acc:var(--t-dsa);--soft:var(--t-dsa-soft)}
+.track.react{--acc:var(--t-react);--soft:var(--t-react-soft)}
 
 /* Notes */
 .note{grid-column:span 2}
@@ -189,10 +190,38 @@ footer{margin-top:28px;color:var(--muted);font-size:14.5px;padding:0 4px}
         </div>
       </div>
     </section>
-    <section class="tile planned react">
-      <span class="tag">Planned</span>
-      <h2>React and TypeScript</h2>
-      <p>Hooks, rendering, state, and the type system.</p>
+    <section class="tile track react" data-src="react-typescript/" aria-labelledby="t-react">
+      <p class="kicker">Frontend</p>
+      <h2 id="t-react">React and TypeScript</h2>
+      <p class="blurb">JavaScript and the event loop, hooks and rendering, state, TypeScript, the browser and security, machine coding, and frontend system design, with a priority guide for SDE-1 and SDE-2.</p>
+      <ul class="topics">
+        <li><a href="react-typescript/#javascript">JavaScript</a></li>
+        <li><a href="react-typescript/#async">Async and event loop</a></li>
+        <li><a href="react-typescript/#react">React and hooks</a></li>
+        <li><a href="react-typescript/#rendering">Rendering and performance</a></li>
+        <li><a href="react-typescript/#state">State, forms, routing</a></li>
+        <li><a href="react-typescript/#typescript">TypeScript</a></li>
+        <li><a href="react-typescript/#web">Browser, HTML, CSS</a></li>
+        <li><a href="react-typescript/#network">HTTP, auth, security</a></li>
+        <li><a href="react-typescript/#machine">Machine coding and design</a></li>
+        <li><a href="react-typescript/#guide">Priorities</a></li>
+      </ul>
+      <div class="mix">
+        <div class="mix-bar" role="img" aria-label="Questions by level: 71 fresher, 69 mid, 14 senior">
+          <span data-level="fresher" style="background:var(--fresher);flex:71"></span>
+          <span data-level="mid" style="background:var(--mid);flex:69"></span>
+          <span data-level="senior" style="background:var(--senior);flex:14"></span>
+        </div>
+        <ul class="mix-legend">
+          <li><i style="background:var(--fresher)"></i><b data-count="fresher">71</b> fresher</li>
+          <li><i style="background:var(--mid)"></i><b data-count="mid">69</b> mid</li>
+          <li><i style="background:var(--senior)"></i><b data-count="senior">14</b> senior</li>
+        </ul>
+        <div class="cta-row">
+          <a class="cta" href="react-typescript/">Start practising</a>
+          <p class="total"><span data-count="total">154</span> questions across 10 topics</p>
+        </div>
+      </div>
     </section>
     <section class="tile planned sys">
       <span class="tag">Planned</span>

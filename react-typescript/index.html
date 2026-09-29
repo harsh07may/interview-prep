@@ -1,0 +1,2361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>React and TypeScript interview prep</title>
+<meta name="description" content="React and TypeScript interview questions with answers you can say out loud: JavaScript, async and the event loop, hooks, rendering, state, TypeScript, the browser, security, machine coding and frontend system design.">
+<meta property="og:title" content="React and TypeScript interview prep">
+<meta property="og:description" content="React, TypeScript and frontend interview questions by level, with follow-ups, traps and sources.">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚛️</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#F6F8FC; --surface:#FFFFFF; --ink:#152033; --muted:#526078; --line:#DFE6F0;
+  --accent:#2D6CB5; --accent-soft:#E1ECF8; --accent-ink:#1F4F8C; --on-accent:#FFFFFF;
+  --fresher:#1F7A52; --fresher-bg:#E3F4EB;
+  --mid:#9A5B00; --mid-bg:#FDF0DA;
+  --senior:#9A2A66; --senior-bg:#FBE6F1;
+  --trap-bg:#FFF6E6; --trap-line:#F0C674;
+  --code-bg:#111A27; --code-ink:#E9E6F5;
+  --display:"Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --body:"Atkinson Hyperlegible", "Segoe UI", system-ui, sans-serif;
+  --mono:"JetBrains Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0F141C; --surface:#182130; --ink:#E8EEF7; --muted:#A3B0C4; --line:#2A3648;
+    --accent:#7FB0EE; --accent-soft:#172A40; --accent-ink:#B5D3F5; --on-accent:#0F1B2B;
+    --fresher:#6FD3A3; --fresher-bg:#17362A;
+    --mid:#F2B45C; --mid-bg:#3A2C14;
+    --senior:#F08BC0; --senior-bg:#3B1B2E;
+    --trap-bg:#2E2615; --trap-line:#7A5E22;
+    --code-bg:#0A1018; --code-ink:#E9E6F5;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0F141C; --surface:#182130; --ink:#E8EEF7; --muted:#A3B0C4; --line:#2A3648;
+  --accent:#7FB0EE; --accent-soft:#172A40; --accent-ink:#B5D3F5; --on-accent:#0F1B2B;
+  --fresher:#6FD3A3; --fresher-bg:#17362A;
+  --mid:#F2B45C; --mid-bg:#3A2C14;
+  --senior:#F08BC0; --senior-bg:#3B1B2E;
+  --trap-bg:#2E2615; --trap-line:#7A5E22;
+  --code-bg:#0A1018; --code-ink:#E9E6F5;
+}
+*,*::before,*::after{box-sizing:inherit}
+html{scroll-padding-top:calc(env(safe-area-inset-top,0px) + 80px)}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);font-size:17px;line-height:1.6;-webkit-font-smoothing:antialiased}
+.wrap{max-width:760px;margin:0 auto;padding:0 20px}
+a{color:var(--accent-ink)}
+a:focus-visible,button:focus-visible,summary:focus-visible{outline:3px solid var(--accent);outline-offset:3px;border-radius:6px}
+code{font-family:var(--mono);font-size:.86em;background:var(--accent-soft);color:var(--accent-ink);padding:.1em .35em;border-radius:5px}
+
+/* Hero */
+.hero{padding:64px 20px 28px}
+.hero h1{font-family:var(--display);font-weight:700;font-size:clamp(2.2rem,6vw,3.4rem);line-height:1.05;letter-spacing:-.02em;margin:0 0 16px}
+.hero p{font-size:1.15rem;color:var(--muted);max-width:34em;margin:0}
+
+/* Phase track: the one bold element */
+.track{margin:36px 0 8px;padding:20px 0 4px;overflow-x:auto}
+.track ol{list-style:none;margin:0;padding:0;display:flex;min-width:640px;position:relative}
+.track ol::before{content:"";position:absolute;top:15px;left:16px;right:16px;height:3px;background:var(--line);border-radius:3px}
+.track li{flex:1;position:relative;display:flex;flex-direction:column;align-items:center;text-align:center;font-size:.8rem;color:var(--muted);line-height:1.3;padding:0 2px}
+.dot{width:33px;height:33px;border-radius:50%;display:grid;place-items:center;font-family:var(--display);font-weight:700;font-size:.9rem;background:var(--surface);border:2px solid var(--line);color:var(--muted);position:relative;z-index:1;margin-bottom:8px}
+.track li.done .dot{background:var(--accent-soft);border-color:var(--accent);color:var(--accent-ink)}
+.track li.now .dot{background:var(--accent);border-color:var(--accent);color:var(--on-accent);box-shadow:0 0 0 6px var(--accent-soft)}
+.track li.now{color:var(--ink);font-weight:700}
+.track-note{font-size:.9rem;color:var(--muted);margin:10px 0 0}
+
+/* Toolbar */
+.toolbar{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-bottom:1px solid var(--line);margin-top:28px}
+.toolbar .wrap{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding-top:12px;padding-bottom:12px}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{font:inherit;font-size:.9rem;border:1.5px solid var(--line);background:var(--surface);color:var(--ink);padding:6px 14px;border-radius:999px;cursor:pointer}
+.chip[aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.spacer{flex:1}
+.ghost{font:inherit;font-size:.9rem;background:none;border:none;color:var(--accent-ink);cursor:pointer;padding:6px 4px;text-decoration:underline;text-underline-offset:3px}
+
+/* How to read */
+.howto{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:20px 22px;margin:28px 0 0}
+.howto h2{font-family:var(--display);font-size:1.15rem;margin:0 0 8px}
+.howto p{margin:0 0 10px;color:var(--muted)}
+.howto p:last-child{margin:0}
+.levels{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 12px}
+
+/* Level pills */
+.lvl{display:inline-block;font-size:.78rem;font-weight:700;padding:3px 10px;border-radius:999px;white-space:nowrap}
+.lvl.fresher{background:var(--fresher-bg);color:var(--fresher)}
+.lvl.mid{background:var(--mid-bg);color:var(--mid)}
+.lvl.senior{background:var(--senior-bg);color:var(--senior)}
+
+/* Parts */
+.part{margin:56px 0 0}
+.part h3{font-family:var(--display);font-weight:700;font-size:1.7rem;letter-spacing:-.01em;margin:0 0 6px}
+.part > p{color:var(--muted);margin:0 0 18px}
+.topic{margin:72px 0 0;padding-top:40px;border-top:2px solid var(--line)}
+.topic:first-child{border-top:none;padding-top:8px;margin-top:40px}
+.phase-title{font-family:var(--display);font-size:1rem;color:var(--accent-ink);margin:0;font-weight:500}
+.topic-title{font-family:var(--display);font-weight:700;font-size:clamp(1.9rem,5vw,2.5rem);letter-spacing:-.02em;line-height:1.1;margin:4px 0 10px}
+.topic-intro{color:var(--muted);font-size:1.08rem;margin:0}
+.jump{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 0}
+.jump a{font-size:.92rem;background:var(--accent-soft);color:var(--accent-ink);padding:5px 12px;border-radius:999px;text-decoration:none}
+.jump a:hover{text-decoration:underline}
+details.reveal{margin:14px 0 0}
+details.reveal > summary{display:block;width:fit-content;cursor:pointer;font-weight:700;color:var(--accent-ink);background:var(--accent-soft);padding:7px 14px;border-radius:999px;list-style:none}
+details.reveal > summary::-webkit-details-marker{display:none}
+details.reveal[open] > summary{margin-bottom:2px}
+.track li a{color:inherit;text-decoration:none;display:flex;flex-direction:column;align-items:center}
+.track li a:hover{text-decoration:underline}
+
+/* Questions */
+details.q{background:var(--surface);border:1px solid var(--line);border-radius:14px;margin:0 0 10px;transition:border-color .15s}
+details.q[open]{border-color:var(--accent)}
+details.q summary{list-style:none;cursor:pointer;padding:16px 18px;display:grid;grid-template-columns:1fr auto;gap:6px 14px;align-items:start}
+details.q summary::-webkit-details-marker{display:none}
+.qtext{font-weight:700;font-size:1.05rem;line-height:1.4}
+.qmeta{display:flex;align-items:center;gap:10px}
+.chev{width:22px;height:22px;flex:none;color:var(--muted);transition:transform .2s}
+details.q[open] .chev{transform:rotate(180deg);color:var(--accent)}
+.qbody{padding:0 18px 18px;border-top:1px dashed var(--line)}
+.qbody p{margin:14px 0 0}
+.qbody ul,.qbody ol{margin:10px 0 0;padding-left:1.3em}
+.qbody li{margin:4px 0}
+.label{font-weight:700}
+pre{background:var(--code-bg);color:var(--code-ink);font-family:var(--mono);font-size:.84rem;line-height:1.55;padding:16px 18px;border-radius:12px;overflow-x:auto;margin:14px 0 0}
+pre code{background:none;color:inherit;padding:0;font-size:inherit}
+/* Syntax highlighting (highlight.js tokens; code blocks are dark in both themes) */
+.hljs-keyword,.hljs-built_in.hljs-keyword{color:#C792EA}
+.hljs-string{color:#B5E08C}
+.hljs-number,.hljs-literal{color:#F5A97F}
+.hljs-comment{color:#A29DB8;font-style:italic}
+.hljs-title.function_,.hljs-title{color:#82AAFF}
+.hljs-title.class_,.hljs-built_in,.hljs-type{color:#FFCB6B}
+.hljs-meta{color:#F78C6C}
+.hljs-attr,.hljs-variable{color:#F0C6FF}
+.hljs-params,.hljs-subst{color:inherit}
+.hljs-operator{color:#89DDFF}
+.trap{background:var(--trap-bg);border-left:4px solid var(--trap-line);padding:12px 14px;border-radius:0 10px 10px 0;margin:14px 0 0}
+.trap p{margin:0}
+.src{font-size:.85rem;color:var(--muted)}
+.tbl{overflow-x:auto;margin:14px 0 0}
+table{border-collapse:collapse;width:100%;font-size:.92rem}
+th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-weight:700;color:var(--muted);font-size:.85rem}
+.hidden{display:none}
+
+/* Revision */
+.revise{background:var(--accent-soft);border-radius:18px;padding:24px 22px;margin:56px 0 0}
+.revise h2{font-family:var(--display);font-size:1.5rem;margin:0 0 4px}
+.revise > p{margin:0 0 14px;color:var(--muted)}
+.revise dl{margin:0;display:grid;grid-template-columns:minmax(120px,190px) 1fr;gap:0}
+.revise dt,.revise dd{padding:10px 0;border-top:1px solid color-mix(in srgb,var(--accent) 22%,transparent);margin:0}
+.revise dt{font-weight:700;padding-right:14px}
+@media (max-width:560px){.revise dl{grid-template-columns:1fr}.revise dd{border-top:none;padding-top:0}}
+
+/* Sources + footer */
+.sources{margin:48px 0 0}
+.sources summary{cursor:pointer;font-family:var(--display);font-size:1.1rem;font-weight:500}
+.sources ul{padding-left:1.2em;color:var(--muted);font-size:.92rem}
+.sources p{color:var(--muted);font-size:.92rem}
+footer{margin:56px 0 64px;padding-top:24px;border-top:1px solid var(--line);color:var(--muted);font-size:.95rem}
+
+
+.foot-links{display:flex;flex-wrap:wrap;gap:8px 22px}
+
+/* Link back to the landing page */
+.home-link{display:inline-block;font-size:.95rem;font-weight:700;color:var(--accent-ink);text-decoration:none;margin:0 0 18px;padding:4px 0}
+.home-link:hover{text-decoration:underline;text-underline-offset:3px}
+
+/* Interview guide */
+.guide h3{font-family:var(--display);font-weight:700;font-size:1.4rem;letter-spacing:-.01em;margin:44px 0 8px}
+.guide > p{margin:0 0 10px}
+.guide ul,.guide ol{padding-left:1.3em;margin:10px 0 0}
+.guide li{margin:6px 0}
+.levels-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin-top:14px}
+.level-card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px 18px}
+.level-card p{margin:10px 0 0;font-size:.97rem}
+.answer-compare{display:grid;gap:12px;margin-top:14px}
+.answer{border-radius:12px;padding:14px 18px}
+.answer p{margin:0}
+.answer p + p{margin-top:6px}
+.answer.weak{background:var(--senior-bg)}
+.answer.strong{background:var(--fresher-bg)}
+.answer.weak .label{color:var(--senior)}
+.answer.strong .label{color:var(--fresher)}
+.guide .trap{margin-top:16px}
+.closing{background:var(--accent-soft);border-radius:18px;padding:26px 24px;margin:52px 0 0}
+.closing h3{margin-top:0}
+.closing p{margin:10px 0 0;font-size:1.05rem}
+
+/* Back to top */
+.to-top{position:fixed;right:calc(20px + env(safe-area-inset-right,0px));bottom:calc(20px + env(safe-area-inset-bottom,0px));z-index:10;width:48px;height:48px;border-radius:50%;border:none;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;cursor:pointer;box-shadow:0 6px 18px color-mix(in srgb,var(--accent) 35%,transparent);opacity:0;transform:translateY(12px);pointer-events:none;transition:opacity .2s,transform .2s}
+.to-top.show{opacity:1;transform:none;pointer-events:auto}
+.to-top:hover{background:var(--accent-ink)}
+.to-top svg{width:22px;height:22px}
+@media (max-width:560px){.to-top{width:44px;height:44px;right:calc(14px + env(safe-area-inset-right,0px));bottom:calc(14px + env(safe-area-inset-bottom,0px))}}
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+
+/* Priority table and roadmap */
+.prio{display:inline-block;font-size:.78rem;font-weight:700;padding:3px 10px;border-radius:999px;white-space:nowrap}
+.prio.p0{background:var(--senior-bg);color:var(--senior)}
+.prio.p1{background:var(--mid-bg);color:var(--mid)}
+.prio.p2{background:var(--accent-soft);color:var(--accent-ink)}
+.prio.p3{background:var(--fresher-bg);color:var(--fresher)}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin-top:14px}
+.badge-must{font-size:.72rem;font-weight:700;color:var(--senior);background:var(--senior-bg);padding:2px 8px;border-radius:999px;margin-left:8px;white-space:nowrap}
+</style>
+</head>
+<body>
+
+<header class="wrap hero">
+  <a class="home-link" href="../">All tracks</a>
+  <h1>React and TypeScript interview prep</h1>
+  <p>The frontend questions Indian interviewers keep asking, from JavaScript and the event loop to hooks, rendering, TypeScript and machine coding. Say each answer aloud before you open it.</p>
+
+  <nav class="track" aria-label="Study plan">
+    <ol>
+      <li class="done"><a href="#javascript"><span class="dot">1</span>JavaScript</a></li>
+      <li class="done"><a href="#async"><span class="dot">2</span>Async and event loop</a></li>
+      <li class="done"><a href="#react"><span class="dot">3</span>React and hooks</a></li>
+      <li class="done"><a href="#rendering"><span class="dot">4</span>Rendering and performance</a></li>
+      <li class="done"><a href="#state"><span class="dot">5</span>State, forms, routing</a></li>
+      <li class="done"><a href="#typescript"><span class="dot">6</span>TypeScript</a></li>
+      <li class="done"><a href="#web"><span class="dot">7</span>Browser, HTML, CSS</a></li>
+      <li class="done"><a href="#network"><span class="dot">8</span>HTTP, auth, security</a></li>
+      <li class="done"><a href="#machine"><span class="dot">9</span>Machine coding and design</a></li>
+      <li class="done"><a href="#guide"><span class="dot">10</span>Priorities</a></li>
+    </ol>
+  </nav>
+  <p class="track-note">Ten topics, ordered the way most rounds unfold. Short on time? Topic 10 has the priority table and the 20 must-not-get-wrong list.</p>
+</header>
+
+<div class="toolbar">
+  <div class="wrap">
+    <div class="chips" role="group" aria-label="Filter by level">
+      <button class="chip" data-level="all" aria-pressed="true">All levels</button>
+      <button class="chip" data-level="fresher" aria-pressed="false">Fresher</button>
+      <button class="chip" data-level="mid" aria-pressed="false">Mid</button>
+      <button class="chip" data-level="senior" aria-pressed="false">Senior</button>
+    </div>
+    <span class="spacer"></span>
+    <button class="ghost" id="toggleAll">Open all answers</button>
+  </div>
+</div>
+
+<main class="wrap">
+  <section class="howto">
+    <h2>How to use this page</h2>
+    <div class="levels">
+      <span class="lvl fresher">Fresher · 0–2 yrs, SDE-1</span>
+      <span class="lvl mid">Mid · 2–5 yrs, SDE-2</span>
+      <span class="lvl senior">Senior · 5+ yrs</span>
+    </div>
+    <p>Every answer has the same parts: what to say, the follow-up you'll likely get, and the trap that catches most candidates. Filter to your level, but skim one level above it.</p>
+    <p>Code cards marked "predict" show the snippet first. Say the output and why before you reveal it. Examples target React 19 and TypeScript 5.x. Each answer says whether its basis is a documentation page we saw or a widely reported pattern.</p>
+    <nav class="jump" id="jump" aria-label="Jump to topic"></nav>
+  </section>
+
+  <div id="content"></div>
+
+  <footer><p>That's the full set. Before each interview, reread the "night before" lists and rebuild one machine-coding component from a blank file.</p><p class="foot-links"><a href="../">All interview tracks</a><a href="https://github.com/harsh07may/interview-prep">Source on GitHub</a></p></footer>
+</main>
+
+<button class="to-top" id="toTop" type="button" aria-label="Back to top" title="Back to top" tabindex="-1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
+
+<script>
+const RD = (path, label) => '<a href="https://react.dev/' + path + '" target="_blank" rel="noopener">' + label + '</a>';
+const EFFECT = RD('reference/react/useEffect', 'react.dev: useEffect');
+const NOEFFECT = RD('learn/you-might-not-need-an-effect', 'react.dev: You might not need an effect');
+const COMPILER = RD('learn/react-compiler/introduction', 'react.dev: React Compiler');
+const MEMO = RD('reference/react/memo', 'react.dev: memo');
+const USEMEMO = RD('reference/react/useMemo', 'react.dev: useMemo');
+const SYNC = RD('learn/synchronizing-with-effects', 'react.dev: Synchronizing with effects');
+const REPORTED = "Widely reported: a recurring pattern in frontend interview write-ups. Behaviour follows MDN, the ECMAScript spec and the TypeScript handbook, which were not reopened while writing.";
+const REPORTED_REACT = "Widely reported: a recurring pattern in frontend interview write-ups. Behaviour follows react.dev.";
+
+const javascript = [
+{
+  title: "Types, coercion, and equality",
+  intro: "The warm-up round. Short questions, but wrong answers here set the tone.",
+  qs: [
+    { level:"fresher", q:"What's the difference between var, let, and const?",
+      a:`<p><code>var</code> is function-scoped, hoisted and initialised to <code>undefined</code>, and can be redeclared. <code>let</code> and <code>const</code> are block-scoped and hoisted but sit in the temporal dead zone until their declaration runs, so reading them early throws a <code>ReferenceError</code>. <code>const</code> forbids reassigning the binding, not mutating the value.</p>`,
+      follow:"What does a var inside a for loop with a setTimeout callback print, and how does let change it?",
+      trap:`"let and const aren't hoisted." They are; the engine knows about them from the start of the block, it just refuses access until the declaration line.`,
+      src:REPORTED },
+    { level:"fresher", q:"Explain primitive versus reference types, and what that means when you copy or compare them.",
+      a:`<p>Primitives (string, number, boolean, null, undefined, symbol, bigint) are immutable and copied by value. Objects, arrays and functions are reference types: a variable holds a reference, so assignment copies the reference and <code>===</code> compares identity, not contents.</p>
+         <p>This is why <code>{} === {}</code> is false, and why React state must be replaced, not mutated.</p>`,
+      follow:"How would you compare two objects by value?",
+      trap:"Saying const objects are immutable. const only freezes the binding.",
+      src:REPORTED },
+    { level:"fresher", q:"What's the difference between == and ===? When would you use ==?",
+      a:`<p><code>===</code> compares without coercion. <code>==</code> applies the abstract equality rules, converting types first. Default to <code>===</code>. The one common deliberate use of <code>==</code> is <code>x == null</code>, which is true for both <code>null</code> and <code>undefined</code>.</p>`,
+      follow:"What does [] == false evaluate to, and why?",
+      trap:"Claiming == is simply less strict. It follows precise, if surprising, rules: [] becomes '' then 0, and false becomes 0, so the result is true.",
+      src:REPORTED },
+    { level:"fresher", predict:true, q:"Predict the output of each line.",
+      code:`console.log(typeof null);
+console.log(typeof NaN);
+console.log(NaN === NaN);
+console.log(0.1 + 0.2 === 0.3);
+console.log([] + []);
+console.log("5" - 2, "5" + 2);`,
+      a:`<p>Output: <code>object</code>, <code>number</code>, <code>false</code>, <code>false</code>, an empty string, then <code>3 52</code>.</p>
+         <ul><li><code>typeof null</code> is a historical bug kept for compatibility.</li>
+         <li>NaN is the only value not equal to itself. Use <code>Number.isNaN</code> or <code>Object.is</code>.</li>
+         <li>Floats are binary: 0.1 + 0.2 is 0.30000000000000004.</li>
+         <li><code>-</code> forces numbers; <code>+</code> concatenates if either side is a string.</li></ul>`,
+      follow:"What does Object.is(0, -0) return, and how does it differ from ===?",
+      trap:"Saying NaN === NaN is true, or that typeof null is 'null'.",
+      src:REPORTED, lang:"js" },
+    { level:"fresher", q:"What is falsy in JavaScript? What's the difference between null and undefined?",
+      a:`<p>Exactly eight falsy values: <code>false</code>, <code>0</code>, <code>-0</code>, <code>0n</code>, <code>""</code>, <code>null</code>, <code>undefined</code>, <code>NaN</code>. Everything else is truthy, including <code>"0"</code>, <code>[]</code> and <code>{}</code>.</p>
+         <p><code>undefined</code> means a value was never assigned; <code>null</code> is an intentional "no value". In practice, prefer <code>??</code> over <code>||</code> for defaults so that <code>0</code> and <code>""</code> survive.</p>`,
+      follow:"What's optional chaining, and how does it combine with ??",
+      trap:"Writing count || 10 as a default, which silently replaces a legitimate 0.",
+      src:REPORTED },
+  ]
+},
+{
+  title: "Scope, closures, and hoisting",
+  intro: "The most repeated topic in JavaScript rounds. Expect at least one closure question.",
+  qs: [
+    { level:"fresher", q:"What is a closure? Give a real use for one.",
+      a:`<p>A closure is a function that keeps access to the variables of the scope it was created in, even after that scope has returned. The variables live as long as the function does.</p>
+         <p>Real uses: private state, function factories, memoization, debounce and throttle, and every React hook callback that reads props or state.</p>`,
+      code:`function counter() {
+  let n = 0;                 // private, not reachable from outside
+  return () => ++n;
+}
+const next = counter();
+next(); // 1
+next(); // 2`,
+      follow:"Can a closure cause a memory leak? Yes, if it holds a large object or a listener you never remove.",
+      trap:"Defining it as a function inside a function. The point is retained access to the outer variables.",
+      src:REPORTED, lang:"js" },
+    { level:"fresher", predict:true, q:"What does this print, and how do you make it print 0, 1, 2?",
+      code:`for (var i = 0; i < 3; i++) {
+  setTimeout(() => console.log(i), 0);
+}`,
+      a:`<p>It prints <code>3 3 3</code>. There is one function-scoped <code>i</code>; all three callbacks close over it, and it is 3 by the time the timers fire.</p>
+         <p>Fix: use <code>let</code>, which creates a fresh binding per iteration, or wrap the body in an IIFE that takes <code>i</code> as an argument.</p>`,
+      follow:"Why does let give a per-iteration binding? The spec copies the binding into each iteration's scope.",
+      trap:"Saying setTimeout with 0 runs immediately. It still waits for the current stack to finish.",
+      src:REPORTED, lang:"js" },
+    { level:"fresher", q:"What is hoisting? How do function declarations, function expressions and let behave?",
+      a:`<p>Declarations are registered when their scope is created, before any code runs. Function declarations are hoisted with their body, so you can call them early. <code>var</code> is hoisted as <code>undefined</code>. <code>let</code>, <code>const</code> and <code>class</code> are hoisted but uninitialised (temporal dead zone). A function expression assigned to a <code>var</code> is only <code>undefined</code> until its line runs, so calling it early throws a <code>TypeError</code>.</p>`,
+      follow:"What's the difference between ReferenceError and TypeError in those cases?",
+      trap:`"Hoisting moves code to the top." Nothing moves; it is a consequence of the two-phase creation and execution of scopes.`,
+      src:REPORTED },
+    { level:"mid", q:"Explain lexical scope and the scope chain.",
+      a:`<p>Scope is decided by where code is written, not where it's called. When a name isn't found in the current scope, the engine looks in the enclosing scope, and so on out to global. That lookup path is the scope chain, and it's what closures capture.</p>`,
+      follow:"How does this differ from dynamic scope, and which does JavaScript's this resemble?",
+      trap:"Confusing scope with this. Scope is static; this is set at call time.",
+      src:REPORTED },
+    { level:"mid", q:"Write once(fn) and a memoize(fn) using closures. What are the memoize pitfalls?",
+      a:`<p>Both hold private state in a closure. Pitfalls for memoize: the cache key (<code>JSON.stringify</code> is slow and breaks on functions and cycles), unbounded cache growth, impure functions, and <code>this</code>.</p>`,
+      code:`function once(fn) {
+  let done = false, result;
+  return function (...args) {
+    if (!done) { result = fn.apply(this, args); done = true; }
+    return result;
+  };
+}
+
+function memoize(fn) {
+  const cache = new Map();
+  return function (...args) {
+    const key = JSON.stringify(args);
+    if (cache.has(key)) return cache.get(key);
+    const value = fn.apply(this, args);
+    cache.set(key, value);
+    return value;
+  };
+}`,
+      follow:"How would you bound the cache size? An LRU built on Map's insertion order.",
+      trap:"Memoizing an impure function or one that returns a different object each call and expecting reference equality.",
+      src:REPORTED, lang:"js" },
+    { level:"mid", q:"What is currying, and how is it different from partial application?",
+      a:`<p>Currying turns <code>f(a, b, c)</code> into <code>f(a)(b)(c)</code>: every step takes one argument. Partial application fixes some arguments up front and returns a function for the rest, in any number of steps. <code>bind</code> is partial application.</p>`,
+      code:`const curry = (fn) =>
+  function curried(...args) {
+    return args.length >= fn.length
+      ? fn.apply(this, args)
+      : (...more) => curried.apply(this, [...args, ...more]);
+  };
+
+const add = curry((a, b, c) => a + b + c);
+add(1)(2)(3);   // 6
+add(1, 2)(3);   // 6`,
+      follow:"Why does curry break with default or rest parameters? fn.length ignores them.",
+      trap:"Treating the two terms as synonyms.",
+      src:REPORTED, lang:"js" },
+  ]
+},
+{
+  title: "this, call, apply, and bind",
+  intro: "Another guaranteed topic. Learn the four binding rules and you can answer any variant.",
+  qs: [
+    { level:"fresher", q:"How is the value of this decided?",
+      a:`<p>By how the function is called, in this order of precedence:</p>
+         <ol><li><code>new Fn()</code>: a fresh object.</li>
+         <li><code>call</code>, <code>apply</code>, <code>bind</code>: the object you pass.</li>
+         <li>Method call <code>obj.fn()</code>: <code>obj</code>.</li>
+         <li>Plain call <code>fn()</code>: <code>undefined</code> in strict mode and modules, the global object otherwise.</li></ol>
+         <p>Arrow functions have no <code>this</code> of their own; they use the one from where they were defined.</p>`,
+      follow:"Why do class methods lose this when passed as callbacks?",
+      trap:"Saying this is the object the function was defined in. That's only true for arrows.",
+      src:REPORTED },
+    { level:"fresher", predict:true, q:"What does each call log?",
+      code:`"use strict";
+const user = {
+  name: "Asha",
+  regular() { return this?.name; },
+  arrow: () => typeof this,
+  laterArrow() { setTimeout(() => console.log(this.name), 0); },
+};
+const { regular } = user;
+
+console.log(user.regular());
+console.log(regular());
+console.log(user.arrow());
+user.laterArrow();`,
+      a:`<p>Output: <code>Asha</code>, <code>undefined</code>, <code>object</code> (in a browser script; <code>undefined</code> in an ES module), then <code>Asha</code> after the timer.</p>
+         <ul><li>Destructuring detaches the method, so the call has no receiver and strict mode leaves this undefined.</li>
+         <li>An arrow at object-literal level captures the outer this, not the object.</li>
+         <li>The arrow inside <code>laterArrow</code> captures the method's this, which is <code>user</code>.</li></ul>`,
+      follow:"How would you fix the detached method? bind it, or wrap it in an arrow.",
+      trap:"Expecting the arrow property to see the object as this.",
+      src:REPORTED, lang:"js" },
+    { level:"fresher", q:"Explain call, apply, and bind. Then write your own bind.",
+      a:`<p><code>call(thisArg, a, b)</code> and <code>apply(thisArg, [a, b])</code> invoke immediately; they differ only in how arguments are passed. <code>bind(thisArg, ...preset)</code> returns a new function with this (and optionally leading arguments) fixed.</p>`,
+      code:`Function.prototype.myBind = function (ctx, ...preset) {
+  const fn = this;
+  return function (...args) {
+    return fn.apply(ctx, [...preset, ...args]);
+  };
+};
+// A complete version also handles "new" on the bound function.`,
+      follow:"Can you re-bind a bound function? No; the first bind wins.",
+      trap:"Forgetting that bind returns a function instead of calling it.",
+      src:REPORTED, lang:"js" },
+    { level:"mid", q:"When should you not use an arrow function?",
+      a:`<p>Avoid arrows for object methods that need their own <code>this</code>, for constructors (arrows can't be used with <code>new</code>), for prototype methods, and where you need <code>arguments</code>. Arrows are ideal for callbacks that should keep the surrounding this, and for short inline functions.</p>`,
+      follow:"Do arrows have a prototype property? No.",
+      trap:"Using arrows everywhere because they are shorter.",
+      src:REPORTED },
+  ]
+},
+{
+  title: "Objects, prototypes, and classes",
+  intro: "How JavaScript inheritance really works, and the copying questions that hide state bugs.",
+  qs: [
+    { level:"fresher", q:"What's the difference between a shallow copy and a deep copy? How do you make each?",
+      a:`<p>A shallow copy duplicates the top level only; nested objects are still shared. Use spread <code>{...o}</code>, <code>Object.assign</code> or <code>arr.slice()</code>. A deep copy duplicates everything: use <code>structuredClone(o)</code>, which handles Dates, Maps, Sets and cycles.</p>
+         <p><code>JSON.parse(JSON.stringify(o))</code> is the old trick, but it drops functions, <code>undefined</code> and symbols, turns Dates into strings and throws on cycles.</p>`,
+      follow:"What can't structuredClone copy? Functions, DOM nodes and class prototypes.",
+      trap:"Believing the spread operator deep copies. This is the source of most accidental state mutation in React.",
+      src:REPORTED },
+    { level:"fresher", q:"Explain Object.keys, values, entries, assign and freeze. Is freeze deep?",
+      a:`<p><code>keys</code>, <code>values</code> and <code>entries</code> list an object's own enumerable properties; <code>entries</code> gives <code>[key, value]</code> pairs, and <code>Object.fromEntries</code> reverses it. <code>assign</code> shallow-copies own properties onto a target. <code>freeze</code> blocks adding, removing and changing properties, but only one level deep.</p>`,
+      follow:"What's the difference between freeze, seal and preventExtensions?",
+      trap:"Assuming a frozen object's nested objects are frozen too.",
+      src:REPORTED },
+    { level:"mid", q:"Explain the prototype chain. What's the difference between prototype and __proto__?",
+      a:`<p>Every object has an internal link to another object, its prototype. Property lookup walks that chain until it finds the name or reaches <code>null</code>. <code>__proto__</code> (properly <code>Object.getPrototypeOf</code>) is that link on an instance. <code>prototype</code> is a property on constructor functions: the object that becomes the link for instances made with <code>new</code>.</p>`,
+      code:`function Dog(name) { this.name = name; }
+Dog.prototype.bark = function () { return this.name + " barks"; };
+
+const d = new Dog("Rex");
+Object.getPrototypeOf(d) === Dog.prototype; // true
+d.hasOwnProperty("bark");                   // false, found on the prototype`,
+      follow:"What does Object.create(null) give you? An object with no prototype, useful as a pure dictionary.",
+      trap:"Using the two names interchangeably.",
+      src:REPORTED, lang:"js" },
+    { level:"mid", q:"Are ES6 classes real classes? How does inheritance with extends and super work?",
+      a:`<p>Classes are syntax over the prototype system. <code>extends</code> links the child's prototype to the parent's, and <code>super(...)</code> calls the parent constructor. In a derived constructor you must call <code>super</code> before touching <code>this</code>. Classes are not hoisted usably, always run in strict mode and must be called with <code>new</code>.</p>
+         <p>Also know static members, getters and setters, and private fields with <code>#</code> (truly private, unlike TypeScript's <code>private</code>).</p>`,
+      follow:"Why did React move from class components to hooks? Reuse logic without wrapper components, and no this binding.",
+      trap:"Saying JavaScript now has classical inheritance.",
+      src:REPORTED },
+    { level:"senior", q:"What are Symbol, WeakMap, WeakSet and generators used for?",
+      a:`<ul><li><strong>Symbol:</strong> a unique key, for non-colliding properties and well-known hooks like <code>Symbol.iterator</code>.</li>
+         <li><strong>WeakMap / WeakSet:</strong> hold objects as keys without stopping garbage collection, so they suit metadata and caches tied to an object's lifetime. Not iterable.</li>
+         <li><strong>Generators:</strong> pausable functions with <code>yield</code>, the basis of custom iterators and lazy sequences.</li></ul>`,
+      follow:"What would a memory leak from a Map keyed by DOM nodes look like, and how does WeakMap fix it?",
+      trap:"Listing them without a use case. Interviewers want one concrete reason for each.",
+      src:REPORTED },
+  ]
+},
+{
+  title: "Arrays and functional patterns",
+  intro: "Know the methods and be able to write them yourself; polyfill questions are a favourite.",
+  qs: [
+    { level:"fresher", q:"What's the difference between map, forEach, filter and reduce? Which ones mutate?",
+      a:`<p><code>map</code> returns a new array of the same length; <code>filter</code> returns the subset that passes; <code>reduce</code> folds the array into any value; <code>forEach</code> returns nothing and is for side effects. None of these mutate the source, but <code>sort</code>, <code>reverse</code>, <code>splice</code>, <code>push</code>, <code>pop</code> and <code>shift</code> do. Newer non-mutating twins are <code>toSorted</code>, <code>toReversed</code>, <code>toSpliced</code> and <code>with</code>.</p>`,
+      follow:"Can you break out of forEach? Only by throwing; use a for...of loop, some or every.",
+      trap:"Using map for side effects and ignoring the returned array.",
+      src:REPORTED },
+    { level:"fresher", predict:true, q:"What does this print, and why is it a classic bug?",
+      code:`const nums = [10, 9, 1, 100, 25];
+console.log(nums.sort());
+console.log(["1", "2", "3"].map(parseInt));`,
+      a:`<p>First: <code>[1, 10, 100, 25, 9]</code>. Without a comparator, <code>sort</code> converts to strings and compares them. Use <code>sort((a, b) =&gt; a - b)</code>. It also mutates <code>nums</code>.</p>
+         <p>Second: <code>[1, NaN, NaN]</code>. <code>map</code> passes <code>(value, index, array)</code>, so <code>parseInt</code> receives the index as its radix. Use <code>map(Number)</code> or wrap it in an arrow.</p>`,
+      follow:"Is Array.prototype.sort stable? Yes, guaranteed since ES2019.",
+      trap:"Sorting numbers without a comparator.",
+      src:REPORTED, lang:"js" },
+    { level:"fresher", q:"Implement Array.prototype.map, filter and reduce.",
+      a:`<p>Interviewers check that you pass <code>(value, index, array)</code> to the callback, honour <code>thisArg</code> where relevant, and handle reduce with and without an initial value.</p>`,
+      code:`Array.prototype.myMap = function (cb, thisArg) {
+  const out = [];
+  for (let i = 0; i < this.length; i++) {
+    if (i in this) out[i] = cb.call(thisArg, this[i], i, this);
+  }
+  return out;
+};
+
+Array.prototype.myReduce = function (cb, init) {
+  let i = 0, acc = init;
+  if (arguments.length < 2) {
+    while (i < this.length && !(i in this)) i++;
+    if (i >= this.length) throw new TypeError("Reduce of empty array with no initial value");
+    acc = this[i++];
+  }
+  for (; i < this.length; i++) if (i in this) acc = cb(acc, this[i], i, this);
+  return acc;
+};`,
+      follow:"Now implement flat(depth) recursively, then iteratively.",
+      trap:"Ignoring sparse arrays and the missing-initial-value case, which is where most attempts fail.",
+      src:REPORTED, lang:"js" },
+    { level:"mid", q:"Use reduce to group items by a key, and to count frequencies.",
+      a:`<p>Both build an object keyed by the grouping value. Note <code>Object.groupBy</code> and <code>Map.groupBy</code> now exist in modern runtimes, so mention them, but the reduce form is what interviews ask for.</p>`,
+      code:`const groupBy = (arr, keyFn) =>
+  arr.reduce((acc, item) => {
+    const k = keyFn(item);
+    (acc[k] ||= []).push(item);
+    return acc;
+  }, {});
+
+const count = (arr) =>
+  arr.reduce((acc, x) => ({ ...acc, [x]: (acc[x] ?? 0) + 1 }), {});
+// Spreading in every step is O(n^2). Mutate one accumulator in hot paths.`,
+      follow:"Why is the spread version slow for large arrays?",
+      trap:"Spreading the accumulator on every iteration.",
+      src:REPORTED, lang:"js" },
+    { level:"mid", q:"Explain function composition, pure functions and higher-order functions.",
+      a:`<p>A pure function returns the same output for the same input and touches nothing outside itself. A higher-order function takes or returns a function (<code>map</code>, <code>bind</code>, a debounce wrapper). Composition chains functions so the output of one feeds the next.</p>`,
+      code:`const compose = (...fns) => (x) => fns.reduceRight((v, f) => f(v), x);
+const pipe    = (...fns) => (x) => fns.reduce((v, f) => f(v), x);
+
+const slug = pipe(
+  (s) => s.trim(),
+  (s) => s.toLowerCase(),
+  (s) => s.replace(/\\s+/g, "-")
+);
+slug("  Hello World "); // "hello-world"`,
+      follow:"Why do React reducers and selectors have to be pure?",
+      trap:"Calling any function that returns a value pure, even if it reads or mutates external state.",
+      src:REPORTED, lang:"js" },
+  ]
+}
+];
+
+const topic1Revise = [
+  ["Closures", "A function plus the variables it was created next to. The var-in-a-loop bug is the standard example."],
+  ["this", "Decided at the call site: new, then call/apply/bind, then method, then plain. Arrows use the outer this."],
+  ["Equality", "Use ===. Know the eight falsy values, and that NaN !== NaN."],
+  ["Copying", "Spread is shallow. structuredClone is deep. Freeze is one level."],
+  ["Prototypes", "Lookup walks the chain. prototype is on constructors; the instance link is __proto__."],
+  ["Array traps", "sort() with no comparator sorts strings. map(parseInt) breaks. Know which methods mutate."]
+];
+
+const topic1Sources = `
+  <p>None of these pages were opened while writing. The language behaviour is standard and unchanged for years, but each rule below is checkable against MDN or the ECMAScript specification before you rely on it in an interview.</p>
+  <p>Questions here are widely reported recurring patterns. No question is attributed to a company or platform.</p>`;
+const asyncjs = [
+{
+  title: "The event loop",
+  intro: "Know this cold. Almost every round has an execution-order question.",
+  qs: [
+    { level:"fresher", q:"Explain the event loop.",
+      a:`<p>JavaScript runs one call stack on one thread. Async work (timers, network, DOM events) is handled by the browser's Web APIs, and when it finishes, its callback is queued. The event loop repeatedly checks: if the call stack is empty, run all pending microtasks, then take the next task from the task queue.</p>
+         <p>So a callback never interrupts running code, and a long synchronous loop blocks everything, including rendering.</p>`,
+      follow:"Where do rendering and requestAnimationFrame fit in? The browser may render between tasks, after microtasks drain.",
+      trap:"Saying setTimeout(fn, 0) runs immediately. It queues a task that waits for the stack to clear.",
+      src:REPORTED },
+    { level:"fresher", q:"What is the difference between the microtask queue and the task (macrotask) queue?",
+      a:`<p>Microtasks are promise reactions (<code>.then</code>, <code>await</code> continuations), <code>queueMicrotask</code> and <code>MutationObserver</code> callbacks. Tasks are timers, DOM events, and I/O callbacks. After each task, and whenever the stack empties, the engine drains the whole microtask queue, including microtasks queued by microtasks, before the next task.</p>`,
+      follow:"Can microtasks starve the page? Yes, an endless chain of microtasks blocks rendering and timers.",
+      trap:"Treating all callbacks as one queue.",
+      src:REPORTED },
+    { level:"fresher", predict:true, q:"Predict the output order.",
+      code:`console.log("1");
+setTimeout(() => console.log("2"), 0);
+Promise.resolve().then(() => console.log("3"));
+queueMicrotask(() => console.log("4"));
+(async () => {
+  console.log("5");
+  await null;
+  console.log("6");
+})();
+console.log("7");`,
+      a:`<p>Output: <code>1 5 7 3 4 6 2</code>.</p>
+         <ol><li>Synchronous: 1, then the async function runs up to its first <code>await</code> and logs 5, then 7.</li>
+         <li>Microtasks run in the order they were queued: the promise callback (3), the queueMicrotask callback (4), then the async function's continuation (6).</li>
+         <li>The timer is a task, so 2 comes last.</li></ol>`,
+      follow:"What changes if you add await new Promise(r => setTimeout(r, 0)) before console.log(6)?",
+      trap:"Putting 2 before the promise callbacks because its delay is zero.",
+      src:REPORTED, lang:"js" },
+    { level:"mid", predict:true, q:"Predict the output of this mixed example.",
+      code:`setTimeout(() => console.log("timeout"), 0);
+
+Promise.resolve()
+  .then(() => {
+    console.log("p1");
+    setTimeout(() => console.log("inner timeout"), 0);
+    return Promise.resolve().then(() => console.log("p2"));
+  })
+  .then(() => console.log("p3"));
+
+console.log("sync");`,
+      a:`<p>Output: <code>sync p1 p2 p3 timeout inner timeout</code>.</p>
+         <p>All promise work drains before any timer. The inner timeout is queued after the outer one, so it fires later. (Returning a promise from a <code>then</code> adds extra microtask hops, but still all before the timers.)</p>`,
+      follow:"Where does setInterval drift come from? Each callback is a task and must wait behind other work.",
+      trap:"Believing a timer queued inside a promise callback jumps ahead of an older timer.",
+      src:REPORTED, lang:"js" },
+    { level:"mid", q:"Why is setTimeout(fn, 100) not guaranteed to run at exactly 100 ms? How can you yield to the browser in a long task?",
+      a:`<p>The delay is a minimum. The task waits for the stack to clear, and browsers clamp nested timers and throttle background tabs. To keep the UI responsive during heavy work, split it into chunks and yield between them with <code>setTimeout</code>, <code>scheduler.yield()</code> where supported, <code>requestIdleCallback</code>, or move it to a Web Worker.</p>`,
+      follow:"Which Core Web Vital does a long main-thread task hurt? INP.",
+      trap:"Believing timers are precise.",
+      src:REPORTED },
+  ]
+},
+{
+  title: "Promises and async/await",
+  intro: "The combinators and the error-handling questions.",
+  qs: [
+    { level:"fresher", q:"What is a Promise? What are its states?",
+      a:`<p>A Promise represents a value that isn't available yet. It starts <strong>pending</strong> and settles once, either <strong>fulfilled</strong> with a value or <strong>rejected</strong> with a reason. Consumers attach <code>.then</code>, <code>.catch</code> and <code>.finally</code>; each returns a new promise, which is what makes chaining work.</p>`,
+      follow:"What happens if you return a value from then? If you throw? If you return another promise?",
+      trap:"Nesting .then inside .then and recreating callback hell.",
+      src:REPORTED },
+    { level:"fresher", q:"Explain Promise.all, allSettled, race and any.",
+      a:`<table><thead><tr><th>Method</th><th>Resolves when</th><th>Rejects when</th></tr></thead><tbody>
+         <tr><td><code>all</code></td><td>all fulfil, with an array in input order</td><td>the first rejects</td></tr>
+         <tr><td><code>allSettled</code></td><td>all settle, with status objects</td><td>never</td></tr>
+         <tr><td><code>race</code></td><td>the first settles, fulfil or reject</td><td>if the first to settle rejects</td></tr>
+         <tr><td><code>any</code></td><td>the first fulfils</td><td>all reject, with an AggregateError</td></tr></tbody></table>`,
+      follow:"Does Promise.all cancel the other requests when one fails? No. Promises can't be cancelled; use AbortController.",
+      trap:"Using all for independent optional requests, so one failure loses every result.",
+      src:REPORTED },
+    { level:"fresher", q:"How does error handling differ between promises and async/await? What's the sequential versus parallel trap?",
+      a:`<p>With promises, errors flow to the nearest <code>.catch</code>. With <code>async/await</code>, use <code>try/catch</code>; a rejected awaited promise throws. Awaiting independent calls one after another makes them sequential, which is slow. Start them first, then await together.</p>`,
+      code:`// Sequential: total time = a + b
+const user  = await getUser();
+const posts = await getPosts();
+
+// Parallel: total time = max(a, b)
+const [user2, posts2] = await Promise.all([getUser(), getPosts()]);`,
+      follow:"What does fetch do on a 404? It resolves. You must check response.ok yourself.",
+      trap:"Assuming fetch rejects on HTTP error statuses. It only rejects on network failure.",
+      src:REPORTED, lang:"js" },
+    { level:"mid", q:"Implement Promise.all yourself.",
+      a:`<p>Return a new promise, keep results by index (not by completion order), count completions, reject on the first failure, and wrap each item in <code>Promise.resolve</code> so plain values work. Handle an empty array by resolving immediately.</p>`,
+      code:`function promiseAll(items) {
+  return new Promise((resolve, reject) => {
+    const list = Array.from(items);
+    const results = new Array(list.length);
+    let remaining = list.length;
+    if (remaining === 0) return resolve(results);
+    list.forEach((item, i) => {
+      Promise.resolve(item).then((value) => {
+        results[i] = value;
+        if (--remaining === 0) resolve(results);
+      }, reject);
+    });
+  });
+}`,
+      follow:"Now write allSettled, then a version limited to N concurrent tasks.",
+      trap:"Pushing results in completion order, which scrambles the output.",
+      src:REPORTED, lang:"js" },
+    { level:"mid", q:"Write a retry function with exponential backoff, and a promise timeout wrapper.",
+      a:`<p>Retry only errors worth retrying (network failures and 5xx, not 4xx), double the delay each attempt, and add jitter so many clients don't retry in sync. For a timeout, race the work against a timer, and use <code>AbortController</code> to cancel the underlying request.</p>`,
+      code:`const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function retry(fn, { retries = 3, base = 300 } = {}) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt >= retries) throw err;
+      const delay = base * 2 ** attempt * (0.5 + Math.random());
+      await sleep(delay);
+    }
+  }
+}
+
+const withTimeout = (p, ms) =>
+  Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error("Timed out")), ms))]);`,
+      follow:"How do you make retries safe for POST requests? Idempotency keys.",
+      trap:"Retrying without a limit or without backoff, which turns an outage into a retry storm.",
+      src:REPORTED, lang:"js" },
+    { level:"senior", q:"How do you cancel work in flight, such as a fetch when a component unmounts or a search term changes?",
+      a:`<p>Use an <code>AbortController</code>: pass <code>controller.signal</code> to <code>fetch</code> and call <code>abort()</code> in cleanup; the fetch rejects with an <code>AbortError</code> you should ignore. Abort alone doesn't guard against later chained steps, so in React effects pair it with an <code>ignore</code> flag, or use a data library that handles this for you.</p>`,
+      code:`useEffect(() => {
+  const ctrl = new AbortController();
+  fetch("/api/search?q=" + encodeURIComponent(q), { signal: ctrl.signal })
+    .then((r) => r.json())
+    .then(setResults)
+    .catch((e) => { if (e.name !== "AbortError") setError(e); });
+  return () => ctrl.abort();
+}, [q]);`,
+      follow:"Why can the responses arrive out of order without this? Network latency varies per request.",
+      trap:"Ignoring out-of-order responses, so a slow old request overwrites the newest result.",
+      src:`Cited: ${SYNC} (seen as a documentation excerpt: an explicit ignore flag is the most reliable fix, abort alone is not enough).`, lang:"js" },
+  ]
+},
+{
+  title: "Debounce, throttle, and event delegation",
+  intro: "The utility questions that double as machine-coding warm-ups.",
+  qs: [
+    { level:"fresher", q:"What is the difference between debouncing and throttling? Give a use for each.",
+      a:`<p><strong>Debounce</strong> waits until calls stop for N ms, then runs once: search-as-you-type, auto-save, resize end. <strong>Throttle</strong> runs at most once per N ms while calls keep coming: scroll handlers, mouse-move tracking, button spam guards.</p>`,
+      follow:"What are leading and trailing edge options?",
+      trap:"Swapping the two definitions. A quick memory hook: debounce = wait for quiet, throttle = limit the rate.",
+      src:REPORTED },
+    { level:"fresher", q:"Write debounce and throttle.",
+      a:`<p>Keep the timer or timestamp in a closure, preserve <code>this</code> and arguments, and add a <code>cancel</code> method (needed for cleanup in React).</p>`,
+      code:`function debounce(fn, wait) {
+  let timer;
+  function debounced(...args) {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn.apply(this, args), wait);
+  }
+  debounced.cancel = () => clearTimeout(timer);
+  return debounced;
+}
+
+function throttle(fn, wait) {
+  let last = 0;
+  return function (...args) {
+    const now = Date.now();
+    if (now - last >= wait) {
+      last = now;
+      fn.apply(this, args);
+    }
+  };
+}`,
+      follow:"Why does creating a debounced function inside a React component's render break it? A new closure, and a new timer, on every render.",
+      trap:"Recreating the debounced function on each render, so nothing is ever debounced.",
+      src:REPORTED, lang:"js" },
+    { level:"fresher", q:"What is event bubbling, capturing, and delegation?",
+      a:`<p>An event travels down from the window to the target (capture), fires on the target, then travels back up (bubble). Delegation puts one listener on a common ancestor and uses <code>event.target</code> (or <code>closest</code>) to see which child was hit. It saves memory and works for elements added later.</p>`,
+      code:`list.addEventListener("click", (e) => {
+  const item = e.target.closest("li[data-id]");
+  if (!item || !list.contains(item)) return;
+  select(item.dataset.id);
+});`,
+      follow:"Which events don't bubble? focus and blur (use focusin and focusout), and mouseenter.",
+      trap:"Mixing up target (where it happened) and currentTarget (where the listener is attached).",
+      src:REPORTED, lang:"js" },
+    { level:"mid", q:"How does React handle events, and how does that relate to delegation?",
+      a:`<p>React attaches its listeners at the root container and dispatches to your handlers, passing a synthetic event object that wraps the browser event with consistent behaviour. Since React 17 the root is the container node, not <code>document</code>, which makes running React alongside other frameworks safer. Since React 17 there is also no event pooling, so you can read the event asynchronously.</p>`,
+      follow:"Does e.stopPropagation() in a React handler stop native listeners on document? Not always; ordering between React and native listeners is subtle.",
+      trap:"Attaching native listeners in an effect and expecting React's stopPropagation to block them.",
+      src:REPORTED_REACT },
+  ]
+}
+];
+
+const topic2Revise = [
+  ["Loop order", "Sync code, then all microtasks, then one task, then microtasks again. Promises beat timers."],
+  ["Promise combinators", "all fails fast, allSettled never fails, race takes the first outcome, any takes the first success."],
+  ["Parallel", "Start the promises first, then await Promise.all. Sequential awaits add up."],
+  ["fetch", "It only rejects on network failure. Check response.ok."],
+  ["Debounce vs throttle", "Wait for quiet versus limit the rate. Both keep state in a closure."],
+  ["Delegation", "One listener on the parent, closest() on event.target. target is the source, currentTarget is the listener."]
+];
+
+const topic2Sources = `
+  <p>Only one source in this topic is cited: the react.dev article on synchronizing with effects, seen as a documentation excerpt through a documentation search tool, not opened in full.</p>
+  <ul><li>${SYNC}</li></ul>
+  <p>The event loop and Promise behaviour follow MDN and the ECMAScript specification, which were not opened while writing. Every output-prediction snippet in this topic was run in Node before publishing.</p>`;
+const reactcore = [
+{
+  title: "Fundamentals",
+  intro: "The opening questions. Short answers, but clean ones.",
+  qs: [
+    { level:"fresher", q:"What is React, and why use it over plain JavaScript?",
+      a:`<p>React is a library for building UIs from components. You describe what the UI should look like for a given state, and React works out the minimal DOM changes. That declarative model, plus composition and a large ecosystem, removes the manual DOM bookkeeping that gets brittle in plain JavaScript.</p>`,
+      follow:"Library or framework? A library for the view layer; routing, data fetching and builds come from other tools or a framework like Next.js.",
+      trap:"Answering only 'it's fast because of the virtual DOM'. The benefit is the declarative model.",
+      src:REPORTED_REACT },
+    { level:"fresher", q:"What is JSX? Is it required?",
+      a:`<p>JSX is syntax that looks like HTML but compiles to function calls (<code>jsx()</code> in the modern transform, <code>React.createElement</code> in the old one). It isn't required, but it's the standard. Differences from HTML: <code>className</code>, <code>htmlFor</code>, camelCase event names, expressions in braces, one root element (or a fragment), and every tag must be closed.</p>`,
+      follow:"Why can't you write an if statement inside JSX braces? Braces take expressions; use a ternary, &&, or compute before the return.",
+      trap:"Saying JSX is a template language. It is JavaScript with a syntax extension.",
+      src:REPORTED_REACT },
+    { level:"fresher", q:"What's the difference between props and state?",
+      a:`<p>Props are inputs passed down by a parent; a component must treat them as read-only. State is data a component owns and can change over time, and changing it triggers a re-render. Data flows one way, parent to child; a child talks back by calling a function prop.</p>`,
+      follow:"What is lifting state up? Moving state to the closest common parent so siblings can share it.",
+      trap:"Copying a prop into state 'to modify it'. That creates two sources of truth that drift apart.",
+      src:REPORTED_REACT },
+    { level:"fresher", q:"Why do lists need keys, and why is the array index a poor key?",
+      a:`<p>Keys let React match items between renders, so it can keep the right state and DOM node with each item when the list is reordered, inserted into, or filtered. Use a stable, unique id from the data. An index is only safe for a static list that is never reordered, because after an insertion each index points at a different item, so input values and local state end up on the wrong row.</p>`,
+      follow:"What happens if you use Math.random() as a key? Every render remounts every item.",
+      trap:"Thinking keys are for performance only. They are about identity and preserving state.",
+      src:REPORTED_REACT },
+    { level:"fresher", q:"Controlled versus uncontrolled components?",
+      a:`<p>A controlled input's value lives in React state: <code>value</code> plus <code>onChange</code>. React is the single source of truth, so you can validate, format and react on every keystroke. An uncontrolled input keeps its value in the DOM; you read it with a ref or <code>FormData</code> when needed, and can seed it with <code>defaultValue</code>. Uncontrolled is simpler and cheaper for large forms and file inputs.</p>`,
+      follow:"Why does a controlled input with a value but no onChange become read-only?",
+      trap:"Switching an input from uncontrolled to controlled (value going from undefined to a string) mid-life.",
+      src:REPORTED_REACT },
+    { level:"mid", q:"How do you conditionally render, and what's the classic bug with &&?",
+      a:`<p>Use a ternary, <code>&amp;&amp;</code>, an early return, or a variable. The bug: <code>{count &amp;&amp; &lt;List /&gt;}</code> renders a literal <code>0</code> when count is 0, because 0 is a valid renderable value. Write <code>{count &gt; 0 &amp;&amp; ...}</code> or a ternary.</p>`,
+      follow:"What renders for null, undefined, true and false? Nothing.",
+      trap:"Rendering a stray 0 on screen.",
+      src:REPORTED_REACT },
+    { level:"mid", q:"What is composition, and how do children and render props fit in?",
+      a:`<p>React favours composition over inheritance: build components that accept other elements through <code>children</code> or named props, so a layout doesn't need to know its content. A render prop is a function prop the component calls to let the parent decide what to render; hooks replaced most render-prop and higher-order-component uses, but the slot idea remains.</p>`,
+      code:`function Card({ title, actions, children }: {
+  title: string; actions?: React.ReactNode; children: React.ReactNode;
+}) {
+  return (
+    <section>
+      <header><h2>{title}</h2>{actions}</header>
+      {children}
+    </section>
+  );
+}`,
+      follow:"How does passing children as props help avoid re-renders? The element is created by the parent, so it is not recreated when the wrapper's own state changes.",
+      trap:"Reaching for prop drilling or context before checking if composition removes the need.",
+      src:REPORTED_REACT, lang:"tsx" },
+  ]
+},
+{
+  title: "useState and useEffect",
+  intro: "useEffect is the single most probed hook. Know when not to use it.",
+  qs: [
+    { level:"fresher", predict:true, q:"What does the counter show after one click, and how do you fix it?",
+      code:`function Counter() {
+  const [count, setCount] = useState(0);
+  function handleClick() {
+    setCount(count + 1);
+    setCount(count + 1);
+    setCount(count + 1);
+  }
+  return <button onClick={handleClick}>{count}</button>;
+}`,
+      a:`<p>It shows <code>1</code>. Each render's <code>count</code> is a snapshot, so all three calls set the state to <code>0 + 1</code>. React also batches the updates into one re-render.</p>
+         <p>Use the updater form, <code>setCount(c =&gt; c + 1)</code>, which receives the latest pending state, and the result is 3.</p>`,
+      follow:"Does setState update the variable immediately? No; it schedules a re-render, and the new value appears in the next render.",
+      trap:"Logging state right after calling the setter and expecting the new value.",
+      src:REPORTED_REACT, lang:"tsx" },
+    { level:"fresher", q:"Why must you not mutate state? What does immutable updating look like?",
+      a:`<p>React compares old and new state by reference (<code>Object.is</code>). If you mutate and pass the same reference, React sees no change and can skip the re-render, and memoised children get stale data. Copy and replace instead.</p>`,
+      code:`// object
+setUser((u) => ({ ...u, address: { ...u.address, city: "Pune" } }));
+// array: add, remove, update
+setItems((xs) => [...xs, item]);
+setItems((xs) => xs.filter((x) => x.id !== id));
+setItems((xs) => xs.map((x) => (x.id === id ? { ...x, done: true } : x)));`,
+      follow:"How do libraries like Immer help? You write mutating code against a draft and it produces the immutable result.",
+      trap:"Calling push or sort on a state array and then setting it to the same array.",
+      src:REPORTED_REACT, lang:"tsx" },
+    { level:"fresher", q:"Explain useEffect: the dependency array, cleanup, and when it runs.",
+      a:`<p>An effect runs after the component renders and commits, to synchronise with something outside React (a subscription, a timer, a non-React widget, a network request). Its dependency array lists every reactive value it reads:</p>
+         <ul><li>No array: runs after every render.</li><li><code>[]</code>: runs on mount only.</li><li><code>[a, b]</code>: runs on mount and when <code>a</code> or <code>b</code> changes.</li></ul>
+         <p>The returned cleanup runs before the next run of the effect and when the component unmounts. It should undo what setup did.</p>`,
+      follow:"Effects run after paint by default. What's useLayoutEffect for? Measuring or positioning before the browser paints, to avoid flicker.",
+      trap:"Lying about dependencies to silence the linter. It causes stale closures.",
+      src:`Cited: ${EFFECT} (seen as a documentation excerpt; not opened in full).` },
+    { level:"fresher", q:"Why does useEffect run twice in development?",
+      a:`<p>In development, Strict Mode runs one extra setup, cleanup, setup cycle before the first real setup. It's a stress test that checks your cleanup properly undoes your setup. It does not happen in production. If the double run causes a visible problem, the cleanup is missing or wrong: the user should not be able to tell the difference between one setup and setup, cleanup, setup.</p>`,
+      follow:"How do you handle a fetch that fires twice? Ignore stale results, abort on cleanup, or use a data library that dedupes.",
+      trap:"Removing StrictMode or adding a 'ran once' ref to hide it. That hides the bug rather than fixing it.",
+      src:`Cited: ${EFFECT} (Troubleshooting section, seen as a documentation excerpt).` },
+    { level:"mid", q:"How do you fetch data correctly in useEffect? What is the race condition?",
+      a:`<p>If <code>query</code> changes quickly, two requests are in flight and the slower, older one can resolve last and overwrite the newer result. Fix it with a cleanup that marks the previous run as stale. Also handle loading and error state, and reset stale data when the input changes.</p>
+         <p>In real apps, prefer a data library (TanStack Query, SWR, or your framework's loaders): it handles caching, deduping, retries and cancellation.</p>`,
+      code:`useEffect(() => {
+  let ignore = false;
+  setStatus("loading");
+  fetchResults(query)
+    .then((data) => { if (!ignore) { setResults(data); setStatus("ok"); } })
+    .catch(() => { if (!ignore) setStatus("error"); });
+  return () => { ignore = true; };
+}, [query]);`,
+      follow:"Why does the ignore flag matter even if you also abort the request?",
+      trap:"Writing an async function directly as the effect callback. Effects must return nothing or a cleanup function, not a promise.",
+      src:`Cited: ${EFFECT} and ${NOEFFECT} (both seen as documentation excerpts).`, lang:"tsx" },
+    { level:"mid", q:"When should you not use useEffect?",
+      a:`<p>The rule: use an effect only to synchronise with an external system. Avoid it for:</p>
+         <ul><li><strong>Derived data:</strong> compute it during render (or with <code>useMemo</code> if it is expensive) instead of storing it in state.</li>
+         <li><strong>Reacting to a user action:</strong> put the logic in the event handler.</li>
+         <li><strong>Resetting state when a prop changes:</strong> give the component a <code>key</code>.</li>
+         <li><strong>Chains of effects that set state for each other:</strong> compute everything in one place.</li>
+         <li><strong>Notifying a parent:</strong> call the callback in the handler.</li></ul>`,
+      code:`// Wrong: extra render and a state that can go out of sync
+const [fullName, setFullName] = useState("");
+useEffect(() => setFullName(first + " " + last), [first, last]);
+
+// Right
+const fullName = first + " " + last;`,
+      follow:"How do you reset a form when the selected user id changes? <Profile key={userId} />.",
+      trap:"Using an effect to mirror props into state.",
+      src:`Cited: ${NOEFFECT} (seen as a documentation excerpt; not opened in full).`, lang:"tsx" },
+    { level:"mid", predict:true, q:"This effect logs a stale value. Why, and what are the fixes?",
+      code:`function Timer() {
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => {
+      console.log(count);
+      setCount(count + 1);
+    }, 1000);
+    return () => clearInterval(id);
+  }, []);
+  return <p>{count}</p>;
+}`,
+      a:`<p>The interval callback closes over <code>count</code> from the first render, which is <code>0</code>, and the empty array means the effect never re-runs. It logs 0 forever and the display sticks at 1.</p>
+         <p>Fixes: use the updater form <code>setCount(c =&gt; c + 1)</code> so the callback never reads <code>count</code>; or list <code>count</code> as a dependency (the interval is then reset every second); or read the latest value through a ref or <code>useEffectEvent</code> where available.</p>`,
+      follow:"What's a stale closure in general? A callback that captured a previous render's values.",
+      trap:"Disabling the exhaustive-deps lint rule to make the warning go away.",
+      src:REPORTED_REACT, lang:"tsx" },
+  ]
+},
+{
+  title: "useRef, useMemo, useCallback, and useContext",
+  intro: "The remaining hooks, and the reasoning behind each.",
+  qs: [
+    { level:"fresher", q:"What is useRef used for? Why doesn't changing ref.current re-render?",
+      a:`<p>A ref is a mutable box, <code>{ current }</code>, that React keeps the same across renders. Uses: holding a DOM node (to focus, measure or scroll it), and storing values that must persist without affecting the output: timer ids, previous values, the latest callback. Writing <code>ref.current</code> is a plain mutation, so React isn't told and doesn't re-render. Don't read or write it during rendering.</p>`,
+      code:`function usePrevious<T>(value: T) {
+  const ref = useRef<T | undefined>(undefined);
+  useEffect(() => { ref.current = value; });
+  return ref.current; // the value from the previous render
+}`,
+      follow:"useRef versus useState: which do you choose? State if the screen depends on it, ref if not.",
+      trap:"Using a ref for something displayed on screen and wondering why it never updates.",
+      src:REPORTED_REACT, lang:"tsx" },
+    { level:"mid", q:"useMemo versus useCallback. When do they help, and when don't they?",
+      a:`<p><code>useMemo(fn, deps)</code> caches a computed value; <code>useCallback(fn, deps)</code> caches the function itself (it is <code>useMemo(() =&gt; fn, deps)</code>). They help in three situations: an expensive calculation, a prop passed to a <code>memo</code> child whose identity would otherwise change every render, or a value used as another hook's dependency.</p>
+         <p>They do not make renders free: comparing dependencies costs something, and if nothing downstream depends on identity, they only add noise. Measure first. With React Compiler, much of this becomes automatic, but they remain an escape hatch.</p>`,
+      follow:"Does useCallback alone stop a child re-rendering? No, the child needs to be wrapped in memo too.",
+      trap:"Wrapping everything in useMemo and useCallback by default.",
+      src:`Cited: ${COMPILER} and ${USEMEMO} (seen as documentation excerpts).` },
+    { level:"mid", q:"How does useContext work, and what's the performance catch?",
+      a:`<p>Context lets a value skip the props chain: a Provider supplies it, and any descendant calling <code>useContext</code> reads it. The catch: whenever the Provider's <code>value</code> changes (by reference), every consumer re-renders, even those that read only one field, and <code>memo</code> can't stop it.</p>
+         <p>Mitigate by keeping the value stable (<code>useMemo</code>), splitting into several contexts (state and dispatch, or by update frequency), or using a store with selectors (Redux, Zustand) for frequently changing state.</p>`,
+      code:`function AuthProvider({ children }: { children: React.ReactNode }) {
+  const [user, setUser] = useState<User | null>(null);
+  const value = useMemo(() => ({ user, setUser }), [user]);
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}`,
+      follow:"Is context a state management tool? It's a delivery mechanism; you still supply the state.",
+      trap:"Putting fast-changing values, like mouse position or form text, in one big context.",
+      src:REPORTED_REACT, lang:"tsx" },
+    { level:"mid", q:"What are the Rules of Hooks, and why do they exist?",
+      a:`<p>Call hooks only at the top level of a component or another hook, never inside loops, conditions or nested functions, and only from React functions. React identifies each hook by its call order in a render, so the order must be identical every time; otherwise state gets attached to the wrong hook.</p>`,
+      follow:"How do you run a hook conditionally? You can't; move the condition inside the hook, or extract a child component.",
+      trap:"Placing an early return above a hook call.",
+      src:REPORTED_REACT },
+    { level:"mid", q:"What is a custom hook? Write useLocalStorage or useDebounce.",
+      a:`<p>A custom hook is a function whose name starts with <code>use</code> and that calls other hooks, so stateful logic can be shared. Each call gets its own independent state; hooks share logic, not state.</p>`,
+      code:`function useDebounce<T>(value: T, delay = 300): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const id = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(id);
+  }, [value, delay]);
+  return debounced;
+}
+
+function useLocalStorage<T>(key: string, initial: T) {
+  const [value, setValue] = useState<T>(() => {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw ? (JSON.parse(raw) as T) : initial;
+    } catch { return initial; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+  }, [key, value]);
+  return [value, setValue] as const;
+}`,
+      follow:"Why is the lazy initialiser useState(() => ...) important? It reads storage once, not on every render.",
+      trap:"Assuming two components calling the same hook share state.",
+      src:REPORTED_REACT, lang:"tsx" },
+    { level:"senior", q:"What do useReducer, useTransition, useDeferredValue and useId do, and what is new in React 19?",
+      a:`<ul><li><strong>useReducer:</strong> state transitions expressed as actions, good when the next state depends on several fields.</li>
+         <li><strong>useTransition / useDeferredValue:</strong> mark an update as non-urgent so typing stays responsive while an expensive re-render happens in the background.</li>
+         <li><strong>useId:</strong> a stable id for labels and ARIA attributes that matches between server and client.</li>
+         <li><strong>React 19:</strong> Actions with <code>useActionState</code> and <code>useOptimistic</code>, the <code>use</code> API for reading promises and context, <code>ref</code> as a regular prop (no <code>forwardRef</code>), and the compiler as an opt-in build step.</li></ul>`,
+      follow:"What problem do transitions solve that debouncing doesn't? They keep the input responsive without adding an artificial delay.",
+      trap:"Presenting concurrent features as making code faster. They make the UI feel responsive; the total work is the same.",
+      src:REPORTED_REACT },
+  ]
+}
+];
+
+const topic3Revise = [
+  ["Keys", "Identity, not speed. Stable ids, never random, index only for static lists."],
+  ["State", "A snapshot per render. Use the updater form when the next value depends on the last."],
+  ["useEffect", "Synchronise with the outside world. Cleanup mirrors setup. Dependencies tell the truth."],
+  ["Not an effect", "Derived data, event responses, prop-to-state syncing. Use render, handlers, or a key."],
+  ["Refs", "Mutable, persistent, and silent. No re-render on change."],
+  ["useMemo and useCallback", "For identity and expensive work, after measuring. Not defaults."],
+  ["Context", "Every consumer re-renders on a value change. Stabilise or split."]
+];
+
+const topic3Sources = `
+  <p>Seen only as documentation excerpts through a documentation search tool (none opened in full):</p>
+  <ul><li>${EFFECT}</li><li>${NOEFFECT}</li><li>${SYNC}</li><li>${USEMEMO}</li><li>${COMPILER}</li></ul>
+  <p>Other answers are widely reported interview patterns whose behaviour follows react.dev, which was not reopened for them. Verify React 19 API details against the current documentation.</p>`;
+
+const rendering = [
+{
+  title: "Rendering and reconciliation",
+  intro: "What SDE-2 rounds dig into: why a component re-rendered, and what React does about it.",
+  qs: [
+    { level:"fresher", q:"What causes a React component to re-render?",
+      a:`<p>Three things: its own state changes, its parent re-renders (its children re-render by default, even with identical props), or a context it consumes changes. A change in props matters only because the parent re-rendered to pass them. A mutable value or a ref changing does nothing.</p>`,
+      follow:"Does a re-render mean the DOM is updated? No; React renders, diffs, and touches only the DOM nodes that differ.",
+      trap:"Saying a component re-renders when its props change. It re-renders when its parent does, and props are usually new by then.",
+      src:REPORTED_REACT },
+    { level:"fresher", q:"What is the virtual DOM, and how does reconciliation work?",
+      a:`<p>The virtual DOM is a lightweight tree of JavaScript objects describing the UI. On each update React builds a new tree, diffs it against the previous one, and applies the smallest set of DOM changes. The diff uses two heuristics: elements of different types produce different trees (the old subtree is unmounted), and keys identify which children are the same across renders. That keeps it linear instead of cubic.</p>`,
+      follow:"Is the virtual DOM why React is fast? It's the cost of the declarative model kept low, not a speed-up over hand-tuned DOM code.",
+      trap:"Claiming direct DOM manipulation is always slower.",
+      src:REPORTED_REACT },
+    { level:"mid", q:"Describe the render and commit phases. Where do effects run?",
+      a:`<p><strong>Render:</strong> React calls your components to compute the new tree. It must be pure and can be paused, repeated or thrown away. <strong>Commit:</strong> React applies changes to the DOM, runs ref updates and layout effects, and after paint runs <code>useEffect</code>. Side effects belong in handlers or effects, never in the render body.</p>`,
+      follow:"Why does Strict Mode render components twice? To expose impure render code.",
+      trap:"Fetching or mutating something in the component body.",
+      src:REPORTED_REACT },
+    { level:"mid", predict:true, q:"Click the button once. How many times does each component render, and how do you stop the wasted renders?",
+      code:`function Parent() {
+  const [n, setN] = useState(0);
+  return (
+    <>
+      <button onClick={() => setN(n + 1)}>{n}</button>
+      <Child />
+    </>
+  );
+}
+function Child() {
+  console.log("Child rendered");
+  return <p>Static child</p>;
+}`,
+      a:`<p>Parent renders once per click and so does <code>Child</code>, even though it takes no props. Fixes, cheapest first:</p>
+         <ol><li>Move the state down into a small component that owns the button, so <code>Parent</code> never re-renders.</li>
+         <li>Pass <code>Child</code> as <code>children</code> to a wrapper that owns the state.</li>
+         <li>Wrap <code>Child</code> in <code>React.memo</code>.</li></ol>`,
+      follow:"Why does memo fail if you pass a new object or arrow function as a prop each render?",
+      trap:"Reaching for memo first. Restructuring state usually removes the problem without any comparison cost.",
+      src:REPORTED_REACT, lang:"tsx" },
+    { level:"mid", q:"How does React.memo work, and when does it not help?",
+      a:`<p><code>memo</code> skips re-rendering a component when its props are shallow-equal to the last render's. It fails when a prop is a new object, array or function each render (fix the identity with <code>useMemo</code> or <code>useCallback</code>, or move it out), when the component consumes a changing context, or when it has its own changing state. It is worthwhile for expensive subtrees and list rows, not everywhere.</p>`,
+      follow:"Can you pass a custom comparison function to memo? Yes, but it's rarely a good idea.",
+      trap:"Wrapping cheap components in memo, paying for comparisons that never save work.",
+      src:`Cited: ${MEMO} (seen as a documentation excerpt) and ${COMPILER}.` },
+    { level:"senior", q:"What is React Fiber, at the level an interviewer expects?",
+      a:`<p>Fiber is the reconciler introduced in React 16. It represents work as a linked structure of fiber nodes and processes them in small units, so React can pause, prioritise, resume or abandon rendering. That is what enables concurrent features such as transitions, Suspense and time-slicing: urgent updates (typing) can interrupt non-urgent ones (a big list re-render).</p>`,
+      follow:"What are lanes? The priority model used to schedule updates. A conceptual mention is enough.",
+      trap:"Going deep into internals from memory. Conceptual clarity beats invented detail.",
+      src:REPORTED_REACT },
+  ]
+},
+{
+  title: "Optimisation and loading",
+  intro: "How to answer 'how would you speed up this React app?'",
+  qs: [
+    { level:"mid", q:"How do you optimise a slow React application? Walk through your approach.",
+      a:`<p>Measure first, using the React DevTools Profiler and the browser Performance panel, so you fix the real bottleneck.</p>
+         <ol><li><strong>Avoid the work:</strong> colocate state, lift content into children, don't store derived data.</li>
+         <li><strong>Cheapen the work:</strong> <code>memo</code>, <code>useMemo</code>, <code>useCallback</code> where profiling shows a win; virtualise long lists.</li>
+         <li><strong>Defer the work:</strong> <code>useTransition</code> or <code>useDeferredValue</code> for heavy updates; debounce inputs.</li>
+         <li><strong>Ship less code:</strong> code splitting, lazy loading, tree shaking, lighter dependencies.</li>
+         <li><strong>Fetch smarter:</strong> caching, deduping, pagination, prefetching.</li></ol>`,
+      follow:"What common mistakes make lists slow? Index or random keys, inline heavy work in the row, and no virtualisation.",
+      trap:"Starting with 'wrap everything in useMemo' before profiling.",
+      src:REPORTED_REACT },
+    { level:"mid", q:"Explain code splitting with React.lazy and Suspense.",
+      a:`<p><code>React.lazy</code> takes a dynamic <code>import()</code> and loads the component's chunk only when it first renders; <code>Suspense</code> shows a fallback while it loads. Split by route first (highest payoff), then by heavy, rarely used components such as charts, editors and modals. Add an error boundary to handle chunk load failures.</p>`,
+      code:`const Reports = lazy(() => import("./Reports"));
+
+<ErrorBoundary fallback={<p>Could not load.</p>}>
+  <Suspense fallback={<Spinner />}>
+    <Reports />
+  </Suspense>
+</ErrorBoundary>`,
+      follow:"How do you avoid a spinner flash on navigation? Prefetch on hover or idle, or wrap the navigation in a transition.",
+      trap:"Lazy loading above-the-fold content, which delays the largest contentful paint.",
+      src:REPORTED_REACT, lang:"tsx" },
+    { level:"mid", q:"How would you render a list of 10,000 rows?",
+      a:`<p>Don't render them all. Virtualise (windowing): only mount the rows in and near the viewport, and position them with padding or transforms. Libraries: <code>react-window</code>, <code>react-virtuoso</code>, TanStack Virtual. If virtualisation isn't possible, paginate or load more on scroll. Keep row components cheap and memoised, with stable keys and fixed or measured heights.</p>`,
+      follow:"What breaks with virtualisation? Find-in-page, accessibility semantics, and variable row heights need extra care.",
+      trap:"Adding memo to rows but still mounting all 10,000 DOM nodes.",
+      src:REPORTED_REACT },
+    { level:"senior", q:"What is an error boundary, and what does it not catch?",
+      a:`<p>An error boundary catches errors thrown while rendering, in lifecycle methods and in constructors of its child tree, and renders a fallback instead of unmounting the whole app. It is still a class component (via <code>componentDidCatch</code> and <code>getDerivedStateFromError</code>), or use the <code>react-error-boundary</code> package. It does not catch errors in event handlers, in async code such as promises and timers, in server rendering, or errors thrown by the boundary itself.</p>`,
+      follow:"Where would you place boundaries? Around routes and around risky widgets, so one failure doesn't blank the page.",
+      trap:"Expecting a boundary to catch an error thrown inside onClick.",
+      src:REPORTED_REACT },
+    { level:"senior", q:"What does the React Compiler change about memoisation?",
+      a:`<p>The compiler analyses your components at build time and automatically memoises values and functions, so most manual <code>useMemo</code>, <code>useCallback</code> and <code>memo</code> becomes unnecessary. The documentation still recommends keeping <code>useMemo</code> and <code>useCallback</code> as escape hatches, for example when a memoised value is an effect dependency. For existing code, leave current memoisation in place or test before removing it. It relies on components following the Rules of React.</p>`,
+      follow:"Which codebases benefit the most? Those that follow the rules strictly and have lots of unmemoised components.",
+      trap:"Saying memoisation is dead. Profiling and structure still matter.",
+      src:`Cited: ${COMPILER} (seen as a documentation excerpt; not opened in full).` },
+  ]
+}
+];
+
+const topic4Revise = [
+  ["Re-render triggers", "Own state, parent re-render, changed context. Props change only because the parent rendered."],
+  ["Reconciliation", "Different type means a new subtree. Keys identify siblings. Diff is linear."],
+  ["Render is pure", "No side effects in the body. Commit applies changes, effects run after."],
+  ["Before memo", "Move state down, pass children, then memo. Fix unstable prop identity."],
+  ["Loading", "Split by route, lazy load heavy widgets, virtualise long lists, wrap in Suspense and an error boundary."],
+  ["Approach", "Profile, then avoid, cheapen, defer, or ship less."]
+];
+
+const topic4Sources = `
+  <p>Seen only as documentation excerpts through a documentation search tool (not opened in full): ${MEMO}, ${COMPILER}.</p>
+  <p>The rest are widely reported interview patterns following react.dev, which was not reopened for them. Fiber is described conceptually on purpose; do not memorise internals you cannot explain.</p>`;
+const statemgmt = [
+{
+  title: "Choosing where state lives",
+  intro: "Interviewers want trade-offs, not a library recital.",
+  qs: [
+    { level:"fresher", q:"When would you use useReducer instead of useState?",
+      a:`<p>When the next state depends on several fields, or on complex transitions, or when many handlers update the same state. A reducer centralises those rules in one pure function <code>(state, action) =&gt; newState</code>, makes transitions easy to test, and lets you pass a stable <code>dispatch</code> down instead of many callbacks.</p>`,
+      code:`type State = { items: Item[]; status: "idle" | "loading" | "error" };
+type Action =
+  | { type: "add"; item: Item }
+  | { type: "remove"; id: string }
+  | { type: "load" };
+
+function reducer(state: State, action: Action): State {
+  switch (action.type) {
+    case "add":    return { ...state, items: [...state.items, action.item] };
+    case "remove": return { ...state, items: state.items.filter((i) => i.id !== action.id) };
+    case "load":   return { ...state, status: "loading" };
+  }
+}`,
+      follow:"Why is the dispatch identity stable? React guarantees it, which is handy in dependency arrays.",
+      trap:"Mutating state inside the reducer or doing side effects in it.",
+      src:REPORTED_REACT, lang:"tsx" },
+    { level:"mid", q:"Local state, context, or a global store: how do you decide?",
+      a:`<p>Start local. Lift state only as high as the closest common parent. Use context for values that are read widely but change rarely: theme, locale, current user. Use a store (Redux Toolkit, Zustand) when many distant components read and update the same, frequently changing state and you want selectors, devtools or middleware. Server data belongs in a server-state library, not in a global store.</p>`,
+      follow:"What is prop drilling, and is it always bad? Two or three levels is fine; composition often removes the rest.",
+      trap:"Putting everything in global state 'just in case'.",
+      src:REPORTED_REACT },
+    { level:"mid", q:"What is server state versus client state, and why use TanStack Query?",
+      a:`<p>Client state is owned by the UI (a modal open flag, a form draft). Server state is a remote copy that can go stale, is shared, and needs caching, refetching, dedupe, retries and invalidation. Libraries like TanStack Query or SWR provide those, plus loading and error states, background refetch and optimistic updates, so you stop hand-writing <code>useEffect</code> fetches and copying results into Redux.</p>`,
+      code:`const { data, isPending, error } = useQuery({
+  queryKey: ["todos", filter],
+  queryFn: () => fetchTodos(filter),
+  staleTime: 30_000,
+});
+
+const qc = useQueryClient();
+const add = useMutation({
+  mutationFn: createTodo,
+  onSuccess: () => qc.invalidateQueries({ queryKey: ["todos"] }),
+});`,
+      follow:"What's staleTime versus gcTime? How long data is fresh versus how long unused data stays cached.",
+      trap:"Copying query results into local state, which reintroduces the sync problem.",
+      src:REPORTED_REACT, lang:"tsx" },
+    { level:"mid", q:"Explain Redux: store, actions, reducers, dispatch, selectors and middleware. What does Redux Toolkit add?",
+      a:`<p>One store holds the app state. Components <strong>dispatch</strong> plain <strong>actions</strong>; <strong>reducers</strong> are pure functions that compute the next state; <strong>selectors</strong> read slices of it; <strong>middleware</strong> sits between dispatch and the reducer for async work and logging. Data flows one way.</p>
+         <p><strong>Redux Toolkit</strong> is the recommended way to write it: <code>createSlice</code> generates actions and reducers and lets you write "mutating" code (Immer makes it immutable), <code>createAsyncThunk</code> covers async flows, and <code>configureStore</code> sets up thunk middleware and devtools. RTK Query adds data fetching and caching.</p>`,
+      code:`const todos = createSlice({
+  name: "todos",
+  initialState: [] as Todo[],
+  reducers: {
+    added(state, action: PayloadAction<Todo>) { state.push(action.payload); },
+    toggled(state, action: PayloadAction<string>) {
+      const t = state.find((t) => t.id === action.payload);
+      if (t) t.done = !t.done;
+    },
+  },
+});
+export const { added, toggled } = todos.actions;`,
+      follow:"Why are reducers pure, and how does a selector avoid extra renders? Reference equality on the selected value.",
+      trap:"Writing mutating code in a hand-written reducer. It only works inside createSlice because of Immer.",
+      src:REPORTED_REACT, lang:"tsx" },
+    { level:"mid", q:"Context versus Redux: which and why?",
+      a:`<p>Context has no selectors: any change to the value re-renders all consumers. It is best for low-frequency, app-wide values. Redux (or Zustand) gives selector-based subscriptions, devtools, time-travel debugging, middleware and enforced patterns for large teams. The cost is more concepts and ceremony, so use it when state is large, shared and frequently updated.</p>`,
+      follow:"What makes Zustand attractive? Very little boilerplate and selector-based subscriptions without a provider.",
+      trap:"Saying Context replaces Redux. They solve overlapping but different problems.",
+      src:REPORTED_REACT },
+    { level:"senior", q:"How do you implement an optimistic update, and what could go wrong?",
+      a:`<p>Update the UI immediately as if the request succeeded, send the request, and roll back if it fails. With TanStack Query: cancel in-flight queries for the key, snapshot the cache, write the optimistic value, and on error restore the snapshot; on settle, invalidate to reconcile with the server. React 19's <code>useOptimistic</code> gives a similar shortcut for form actions.</p>
+         <p>Risks: failed rollbacks that confuse users, races between concurrent mutations, and server-generated fields (ids, timestamps) that don't exist yet.</p>`,
+      follow:"When should you not be optimistic? Payments, and anything where a false success is costly.",
+      trap:"Forgetting to roll back, leaving the UI wrong after a failure.",
+      src:REPORTED_REACT },
+  ]
+},
+{
+  title: "Forms",
+  intro: "Forms are the most common machine-coding task. Show validation and edge cases.",
+  qs: [
+    { level:"fresher", q:"How do you build a form with validation in React?",
+      a:`<p>Keep values in state (controlled) or read them from <code>FormData</code> on submit (uncontrolled). Validate on submit, and after a field has been touched, not on the first keystroke. Show errors next to the field, tie them to the input with <code>aria-describedby</code>, prevent the default submit, and disable the button while submitting. Always validate again on the server.</p>`,
+      code:`function Login() {
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const data = Object.fromEntries(new FormData(e.currentTarget)) as Record<string, string>;
+    const next: Record<string, string> = {};
+    if (!/^\\S+@\\S+\\.\\S+$/.test(data.email ?? "")) next.email = "Enter a valid email";
+    if ((data.password ?? "").length < 8) next.password = "Use at least 8 characters";
+    setErrors(next);
+    if (Object.keys(next).length === 0) await signIn(data);
+  }
+  return (
+    <form onSubmit={onSubmit} noValidate>
+      <label htmlFor="email">Email</label>
+      <input id="email" name="email" type="email" aria-invalid={!!errors.email}
+             aria-describedby={errors.email ? "email-err" : undefined} />
+      {errors.email && <p id="email-err" role="alert">{errors.email}</p>}
+      {/* password field omitted */}
+      <button type="submit">Sign in</button>
+    </form>
+  );
+}`,
+      follow:"How would this change for 30 fields? Uncontrolled inputs with React Hook Form, plus a schema (Zod).",
+      trap:"Validating only on the client, or on every keystroke before the user has typed anything.",
+      src:REPORTED_REACT, lang:"tsx" },
+    { level:"mid", q:"Why use React Hook Form, and how does it pair with Zod?",
+      a:`<p>React Hook Form registers inputs as uncontrolled and reads them through refs, so typing doesn't re-render the whole form. It handles touched, dirty and error state, field arrays and async validation. Pair it with a Zod (or similar) schema through a resolver: one schema drives runtime validation and, through <code>z.infer</code>, the TypeScript type of the form values.</p>`,
+      code:`const schema = z.object({
+  email: z.string().email(),
+  age: z.coerce.number().min(18),
+});
+type FormValues = z.infer<typeof schema>;
+
+const { register, handleSubmit, formState: { errors } } =
+  useForm<FormValues>({ resolver: zodResolver(schema) });`,
+      follow:"When would you use Controller? For controlled third-party components that don't expose a ref.",
+      trap:"Hand-rolling a validation state machine for a large form.",
+      src:REPORTED_REACT, lang:"tsx" },
+    { level:"mid", q:"How do you handle file uploads and dynamic (add/remove) fields?",
+      a:`<p><strong>Files:</strong> read <code>input.files</code>, validate type and size, show a preview via <code>URL.createObjectURL</code> (and revoke it), and upload with <code>FormData</code> and <code>fetch</code> or <code>XMLHttpRequest</code> when you need upload progress. For large files use chunked or presigned direct-to-storage uploads.</p>
+         <p><strong>Dynamic fields:</strong> keep an array in state, give each row a stable id (not the index) as its key, and update immutably. React Hook Form offers <code>useFieldArray</code>.</p>`,
+      follow:"Why does fetch not give upload progress? Use XHR's upload events, or a library built on them.",
+      trap:"Using the index as the key for removable rows, so inputs keep the wrong values.",
+      src:REPORTED_REACT },
+  ]
+},
+{
+  title: "Routing",
+  intro: "React Router concepts, and the auth-flow question that follows them.",
+  qs: [
+    { level:"fresher", q:"Explain the main React Router concepts: routes, nested routes, params and navigation.",
+      a:`<p>A route maps a URL pattern to an element. <strong>Nested routes</strong> render children inside a parent's <code>&lt;Outlet /&gt;</code>, so a layout stays mounted. <strong>Params</strong> come from dynamic segments (<code>/users/:id</code>) via <code>useParams</code>; <strong>query strings</strong> via <code>useSearchParams</code>. Navigate with <code>&lt;Link&gt;</code> for user clicks and <code>useNavigate</code> for programmatic moves. A catch-all <code>*</code> route handles 404s.</p>`,
+      follow:"What's the difference between Link and an anchor tag? Link changes the URL without a full page reload.",
+      trap:"Storing URL-derived state (filters, page number) in component state, so links can't be shared and refresh loses it.",
+      src:REPORTED_REACT },
+    { level:"mid", q:"How do you build protected routes?",
+      a:`<p>Wrap private routes in a layout route that checks authentication, and redirects to login while remembering the intended destination. Handle the "still checking session" state so users don't flash to the login page. Remember that this is only a UX guard: the server must enforce authorisation on every API call.</p>`,
+      code:`function RequireAuth() {
+  const { user, loading } = useAuth();
+  const location = useLocation();
+  if (loading) return <Spinner />;
+  if (!user) return <Navigate to="/login" state={{ from: location }} replace />;
+  return <Outlet />;
+}
+
+// <Route element={<RequireAuth />}>
+//   <Route path="/dashboard" element={<Dashboard />} />
+// </Route>`,
+      follow:"How do you send the user back after login? Read location.state.from and navigate there.",
+      trap:"Treating a client-side route guard as security.",
+      src:REPORTED_REACT, lang:"tsx" },
+    { level:"mid", q:"How do you lazy-load routes, and what do data routers add?",
+      a:`<p>Use <code>React.lazy</code> per route element (or the router's <code>lazy</code> route property) so each route is its own chunk. Data routers (<code>createBrowserRouter</code>) add <code>loader</code> and <code>action</code> functions, which start fetching before the component renders and avoid render-then-fetch waterfalls, plus per-route error elements.</p>`,
+      follow:"What's a fetch waterfall? Requests that wait on each other because each starts only after its component mounts.",
+      trap:"Loading data in an effect of a deeply nested component, which serialises requests.",
+      src:REPORTED_REACT },
+  ]
+}
+];
+
+const topic5Revise = [
+  ["Where state lives", "Local first, lift to the common parent, context for rare changes, a store for shared hot state."],
+  ["Server state", "Cache, dedupe, refetch. Use TanStack Query, not Redux plus useEffect."],
+  ["Redux", "Store, action, reducer, selector, middleware. Toolkit: createSlice, createAsyncThunk, Immer."],
+  ["Context vs Redux", "No selectors versus selectors. Low-frequency values versus large hot state."],
+  ["Forms", "Validate on submit and after touch, link errors with ARIA, and always validate on the server."],
+  ["Routing", "URL is state. Nested routes use Outlet. A client guard is UX, not security."]
+];
+
+const topic5Sources = `
+  <p>No page in this topic was opened while writing, and none was seen as a search excerpt. These are widely reported interview patterns. Redux Toolkit, TanStack Query, React Hook Form, Zod and React Router APIs change between major versions, so check the current documentation of each before an interview.</p>`;
+const typescript = [
+{
+  title: "Fundamentals",
+  intro: "The 'explain the difference' questions. Each has a short, crisp answer.",
+  qs: [
+    { level:"fresher", q:"Why TypeScript? What does it do, and what doesn't it do?",
+      a:`<p>TypeScript adds a static type system to JavaScript. It catches mistakes at compile time, powers autocomplete and safe refactoring, and documents intent. The types are erased on compilation, so there is <strong>no runtime checking</strong>: data from an API or <code>JSON.parse</code> is not validated unless you do it (with a schema library such as Zod).</p>`,
+      follow:"What does strict mode turn on? strictNullChecks, noImplicitAny, strictFunctionTypes and more.",
+      trap:"Believing a type annotation on an API response guarantees the shape at runtime.",
+      src:REPORTED },
+    { level:"fresher", q:"any versus unknown versus never versus void?",
+      a:`<ul><li><strong>any:</strong> switches type checking off for that value. Avoid it.</li>
+         <li><strong>unknown:</strong> the safe top type. You can assign anything to it, but must narrow it before use.</li>
+         <li><strong>never:</strong> a value that cannot exist: a function that always throws, an exhausted union, an impossible intersection.</li>
+         <li><strong>void:</strong> a function that returns nothing useful.</li></ul>`,
+      code:`function parse(input: unknown): string {
+  if (typeof input === "string") return input.trim();
+  throw new Error("Expected a string");
+}
+
+function assertNever(x: never): never {
+  throw new Error("Unhandled: " + JSON.stringify(x));
+}`,
+      follow:"Where would you use never for exhaustiveness checking? In the default branch of a switch on a union.",
+      trap:"Using any 'temporarily' for an API response and never coming back.",
+      src:REPORTED, lang:"ts" },
+    { level:"fresher", q:"interface versus type: what is the difference and which do you pick?",
+      a:`<p>For object shapes they are largely interchangeable. Differences: <code>interface</code> can be extended and merged (declaration merging: two interfaces with the same name combine), gives clearer error messages, and suits public object contracts and class implementation. <code>type</code> can name anything: unions, intersections, tuples, primitives, mapped and conditional types, but cannot be re-opened.</p>
+         <p>A reasonable rule: use <code>interface</code> for object shapes you may extend, and <code>type</code> for everything else. Whatever you choose, be consistent with the codebase.</p>`,
+      code:`interface User { id: string; name: string }
+interface Admin extends User { permissions: string[] }
+
+type Id = string | number;               // only a type can do this
+type Result<T> = { ok: true; value: T } | { ok: false; error: string };`,
+      follow:"What is declaration merging useful for? Augmenting third-party or global types.",
+      trap:"Claiming one is faster or that type can't be extended. It can, using intersections.",
+      src:REPORTED, lang:"ts" },
+    { level:"fresher", q:"Union versus intersection types? What are literal types and enums?",
+      a:`<p>A union <code>A | B</code> is a value that is either A or B; you may use only what both share until you narrow. An intersection <code>A &amp; B</code> is a value that is both, with all members of each. A literal type is a specific value as a type: <code>"GET" | "POST"</code>. String-literal unions usually replace enums: no runtime code, and they work with narrowing. Enums exist, but produce runtime objects and (for numeric ones) allow surprising assignments; <code>as const</code> objects are a common alternative.</p>`,
+      code:`type Method = "GET" | "POST";
+const ROLES = { admin: "admin", user: "user" } as const;
+type Role = (typeof ROLES)[keyof typeof ROLES]; // "admin" | "user"`,
+      follow:"What does as const do? Makes values readonly and infers the narrowest literal types.",
+      trap:"Mixing up | and &. Intersecting two object types combines properties; intersecting two primitives gives never.",
+      src:REPORTED, lang:"ts" },
+    { level:"fresher", q:"What is type inference? When should you annotate explicitly?",
+      a:`<p>TypeScript infers types from values and return statements, so you don't write them everywhere. Annotate at boundaries: function parameters, exported function return types, public APIs, empty arrays and objects that would infer as <code>never[]</code> or <code>{}</code>, and when the inferred type is wider than you mean. Use <code>satisfies</code> to check a value against a type while keeping its narrower inferred type.</p>`,
+      code:`const routes = {
+  home: "/",
+  user: "/users/:id",
+} satisfies Record<string, string>;
+routes.home; // typed as string, and keys stay known`,
+      follow:"What's the difference between satisfies and a type annotation? Annotation widens to the declared type; satisfies keeps the inferred one.",
+      trap:"Annotating every local variable, which adds noise and can hide better inferred types.",
+      src:REPORTED, lang:"ts" },
+    { level:"fresher", q:"What are tuples, optional properties and readonly?",
+      a:`<p>A tuple is a fixed-length array with a type per position: <code>[string, number]</code>, and it is what <code>useState</code> returns. An optional property <code>name?: string</code> may be missing, so its type includes <code>undefined</code>. <code>readonly</code> forbids assignment to a property or array element at compile time only; it is not runtime immutability.</p>`,
+      follow:"What does as const do to an array? Turns it into a readonly tuple.",
+      trap:"Assuming readonly stops mutation at runtime.",
+      src:REPORTED },
+  ]
+},
+{
+  title: "Generics and type manipulation",
+  intro: "Generics are the dividing line between SDE-1 and SDE-2 answers.",
+  qs: [
+    { level:"mid", q:"What are generics, and what are constraints?",
+      a:`<p>Generics parameterise types, so one function or component works over many types without losing information. A constraint (<code>extends</code>) limits what the parameter can be, which lets you use its members safely.</p>`,
+      code:`function first<T>(xs: T[]): T | undefined { return xs[0]; }
+
+function getProp<T, K extends keyof T>(obj: T, key: K): T[K] {
+  return obj[key];
+}
+
+getProp({ id: 1, name: "A" }, "name"); // string
+getProp({ id: 1, name: "A" }, "oops"); // compile error`,
+      follow:"Why not just use any? Any loses the relationship between input and output.",
+      trap:"Adding a generic that is used only once. If it appears once in the signature, it usually isn't earning its keep.",
+      src:REPORTED, lang:"ts" },
+    { level:"mid", q:"Explain keyof, typeof, and indexed access types.",
+      a:`<p><code>keyof T</code> is the union of T's keys. <code>typeof x</code> in a type position takes the type of a value. <code>T[K]</code> looks up the type of a property. Combined, they derive types from a single source of truth instead of duplicating them.</p>`,
+      code:`const config = { retries: 3, url: "/api" };
+type Config = typeof config;          // { retries: number; url: string }
+type ConfigKey = keyof Config;        // "retries" | "url"
+type RetryType = Config["retries"];   // number
+
+type Elem = string[][number];         // string: the element type of an array type`,
+      follow:"Why derive types rather than write them twice? They can't drift apart.",
+      trap:"Confusing the JavaScript typeof operator with the type-position typeof.",
+      src:REPORTED, lang:"ts" },
+    { level:"mid", q:"What are mapped types and conditional types? Write Readonly or Partial yourself.",
+      a:`<p>A mapped type builds a new type by transforming each key of another. A conditional type chooses between two types based on a check: <code>T extends U ? X : Y</code>, and <code>infer</code> captures a type inside the check. Conditional types distribute over unions when T is a naked type parameter.</p>`,
+      code:`type MyPartial<T>  = { [K in keyof T]?: T[K] };
+type MyReadonly<T> = { readonly [K in keyof T]: T[K] };
+type MyPick<T, K extends keyof T> = { [P in K]: T[P] };
+
+type ElementOf<T> = T extends (infer U)[] ? U : never;
+type Awaited2<T> = T extends Promise<infer U> ? Awaited2<U> : T;
+
+type A = ElementOf<string[]>;          // string
+type B = ElementOf<string | number[]>; // number: distributes, string gives never`,
+      follow:"What does the -? modifier do in a mapped type? Removes optionality; it is how Required is built.",
+      trap:"Forgetting that conditional types distribute over unions.",
+      src:REPORTED, lang:"ts" },
+    { level:"mid", q:"What are template literal types, and where are they useful?",
+      a:`<p>They build string types from other types, using the same syntax as template strings. Useful for event names, CSS variable names, route strings and typed keys. Combined with unions they generate every combination.</p>`,
+      code:`type Size = "sm" | "md" | "lg";
+type ClassName = \`btn-\${Size}\`;                     // "btn-sm" | "btn-md" | "btn-lg"
+type EventName<T extends string> = \`on\${Capitalize<T>}\`; // EventName<"click"> is "onClick"`,
+      follow:"What are Uppercase, Lowercase, Capitalize and Uncapitalize? Built-in string manipulation types.",
+      trap:"Overusing them so error messages become unreadable.",
+      src:REPORTED, lang:"ts" },
+  ]
+},
+{
+  title: "Utility types and narrowing",
+  intro: "Know the utility types by heart and the ways to prove a type to the compiler.",
+  qs: [
+    { level:"fresher", q:"Explain Partial, Required, Readonly, Pick, Omit and Record with examples.",
+      a:`<table><thead><tr><th>Utility</th><th>Effect</th></tr></thead><tbody>
+         <tr><td><code>Partial&lt;T&gt;</code></td><td>every property optional (update payloads)</td></tr>
+         <tr><td><code>Required&lt;T&gt;</code></td><td>every property required</td></tr>
+         <tr><td><code>Readonly&lt;T&gt;</code></td><td>every property readonly</td></tr>
+         <tr><td><code>Pick&lt;T, K&gt;</code></td><td>keep only the keys K</td></tr>
+         <tr><td><code>Omit&lt;T, K&gt;</code></td><td>remove the keys K</td></tr>
+         <tr><td><code>Record&lt;K, V&gt;</code></td><td>an object with keys K and values V</td></tr></tbody></table>`,
+      code:`interface User { id: string; name: string; email: string }
+
+type UpdateUser = Partial<Omit<User, "id">>;
+type UserPreview = Pick<User, "id" | "name">;
+type ById = Record<User["id"], User>;`,
+      follow:"Does Partial work on nested properties? No, it is shallow.",
+      trap:"Typos in Omit keys. Omit accepts any string key, so a misspelt key is silently ignored, while Pick would give a compile error.",
+      src:REPORTED, lang:"ts" },
+    { level:"mid", q:"What do Exclude, Extract, NonNullable, ReturnType, Parameters and Awaited do?",
+      a:`<ul><li><code>Exclude&lt;U, X&gt;</code>: remove from a union the members assignable to X. <code>Extract</code> keeps them.</li>
+         <li><code>NonNullable&lt;T&gt;</code>: remove <code>null</code> and <code>undefined</code>.</li>
+         <li><code>ReturnType&lt;F&gt;</code> and <code>Parameters&lt;F&gt;</code>: derive a function's return type and parameter tuple.</li>
+         <li><code>Awaited&lt;T&gt;</code>: unwrap a promise's resolved type.</li></ul>`,
+      code:`type Status = "idle" | "loading" | "error";
+type Active = Exclude<Status, "idle">;          // "loading" | "error"
+
+async function loadUser() { return { id: "1", name: "A" }; }
+type User = Awaited<ReturnType<typeof loadUser>>; // { id: string; name: string }`,
+      follow:"Why derive the type from the function instead of writing it? A change to the function updates every user of the type.",
+      trap:"Writing ReturnType of an async function and expecting the resolved type. It gives the Promise; wrap in Awaited.",
+      src:REPORTED, lang:"ts" },
+    { level:"fresher", q:"What is type narrowing? List the ways to narrow.",
+      a:`<p>Narrowing refines a union to a more specific type inside a branch. Tools: <code>typeof</code> (primitives), <code>instanceof</code> (classes), the <code>in</code> operator (property exists), truthiness and equality checks, discriminated unions, and custom type guards (<code>x is T</code>) or assertion functions.</p>`,
+      code:`function len(x: string | string[]) {
+  return typeof x === "string" ? x.length : x.length; // narrowed per branch
+}
+
+function isUser(v: unknown): v is User {
+  return typeof v === "object" && v !== null && "id" in v;
+}`,
+      follow:"How is a type predicate different from a type assertion (as)? A guard is checked at runtime by your code; an assertion just tells the compiler to trust you.",
+      trap:"Using as User to silence an error. It hides the bug instead of proving the type.",
+      src:REPORTED, lang:"ts" },
+    { level:"mid", q:"What is a discriminated union, and why is it the best way to model state?",
+      a:`<p>A union whose members share a literal-typed tag property. Checking the tag narrows the whole object. It makes impossible states unrepresentable: a "loading" state can't carry data, and a "success" state must. It works together with exhaustiveness checks via <code>never</code>.</p>`,
+      code:`type Fetch<T> =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "success"; data: T }
+  | { status: "error"; error: Error };
+
+function view(s: Fetch<User>) {
+  switch (s.status) {
+    case "success": return s.data.name;
+    case "error":   return s.error.message;
+    default:        return "...";
+  }
+}`,
+      follow:"Compare it to isLoading, isError and data as separate booleans. Those permit invalid combinations like loading and error together.",
+      trap:"Modelling state with several booleans and optional fields.",
+      src:REPORTED, lang:"ts" },
+  ]
+},
+{
+  title: "TypeScript with React",
+  intro: "How to type props, state, events, refs, reducers, hooks and generic components.",
+  qs: [
+    { level:"fresher", q:"How do you type props, children and event handlers?",
+      a:`<p>Declare a props type or interface and annotate the destructured parameter. Use <code>React.ReactNode</code> for children, and the specific event type from React (<code>React.ChangeEvent&lt;HTMLInputElement&gt;</code>, <code>React.MouseEvent&lt;HTMLButtonElement&gt;</code>, <code>React.FormEvent&lt;HTMLFormElement&gt;</code>). Passing a function prop to an inline handler often infers the event type for free.</p>`,
+      code:`type ButtonProps = {
+  label: string;
+  onClick?: (e: React.MouseEvent<HTMLButtonElement>) => void;
+  variant?: "primary" | "ghost";
+  children?: React.ReactNode;
+};
+
+function Button({ label, onClick, variant = "primary" }: ButtonProps) {
+  return <button className={variant} onClick={onClick}>{label}</button>;
+}
+
+function Search() {
+  const [q, setQ] = useState("");
+  return <input value={q} onChange={(e) => setQ(e.target.value)} />; // e inferred
+}`,
+      follow:"Why do most teams avoid React.FC? It adds little, and its old implicit children typing caused confusion.",
+      trap:"Typing every event as any or using the DOM Event instead of React's synthetic event types.",
+      src:REPORTED, lang:"tsx" },
+    { level:"fresher", q:"How do you type useState, useRef and useReducer?",
+      a:`<p>Let inference work for simple state. Supply the generic when the initial value doesn't show the full type: <code>null</code> initial values and empty arrays. For DOM refs, use <code>useRef&lt;HTMLInputElement&gt;(null)</code> and remember <code>ref.current</code> may be null. Type a reducer with a state type and a discriminated union of actions.</p>`,
+      code:`const [user, setUser] = useState<User | null>(null);
+const [items, setItems] = useState<Item[]>([]);
+
+const inputRef = useRef<HTMLInputElement>(null);
+inputRef.current?.focus();
+
+const [state, dispatch] = useReducer(reducer, initialState);`,
+      follow:"What is the difference between a ref for the DOM and a ref for a mutable value in the types? The initial null versus a value.",
+      trap:"Leaving useState([]) untyped, which infers never[].",
+      src:REPORTED, lang:"tsx" },
+    { level:"mid", q:"How do you write a generic component or hook in TSX?",
+      a:`<p>Add a type parameter to the function and use it in the props. In a <code>.tsx</code> file, a generic arrow function needs a trailing comma or an <code>extends</code> constraint (<code>&lt;T,&gt;</code>), because <code>&lt;T&gt;</code> looks like JSX. Function declarations avoid the issue.</p>`,
+      code:`type ListProps<T> = {
+  items: T[];
+  getKey: (item: T) => string;
+  render: (item: T) => React.ReactNode;
+};
+
+function List<T>({ items, getKey, render }: ListProps<T>) {
+  return <ul>{items.map((i) => <li key={getKey(i)}>{render(i)}</li>)}</ul>;
+}
+
+<List items={users} getKey={(u) => u.id} render={(u) => u.name} />; // T inferred as User`,
+      follow:"How do you make a component that accepts the props of a native element? ComponentProps<'button'> or ComponentPropsWithoutRef.",
+      trap:"Falling back to any for a reusable component because generics feel hard.",
+      src:REPORTED, lang:"tsx" },
+    { level:"mid", q:"How do you type API responses safely, given types vanish at runtime?",
+      a:`<p>Give the shape a type, but treat network data as untrusted. Best practice: define a schema (Zod, Valibot) and parse the response, so the runtime check and the static type come from one definition. At minimum, type the response as <code>unknown</code> and narrow, rather than casting with <code>as</code>. Keep API types separate from UI types and map between them.</p>`,
+      code:`const UserSchema = z.object({ id: z.string(), name: z.string() });
+type User = z.infer<typeof UserSchema>;
+
+async function getUser(id: string): Promise<User> {
+  const res = await fetch("/api/users/" + id);
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  return UserSchema.parse(await res.json()); // throws if the shape is wrong
+}`,
+      follow:"What about generating types from OpenAPI? Good for large APIs; still validate at the boundary if the backend can't be trusted.",
+      trap:"return res.json() as Promise<User>. It compiles and validates nothing.",
+      src:REPORTED, lang:"tsx" },
+    { level:"senior", q:"Design a polymorphic component type, or a type-safe event emitter.",
+      a:`<p>Polymorphic: a generic <code>as</code> prop determines the element and therefore the allowed props. Build it with <code>React.ElementType</code> and <code>ComponentPropsWithoutRef&lt;T&gt;</code>. The interviewer is checking that you can combine generics, constraints and utility types, and that you know when to stop: many teams prefer simple variants over fully polymorphic components.</p>`,
+      code:`type BoxProps<T extends React.ElementType> = {
+  as?: T;
+  children?: React.ReactNode;
+} & Omit<React.ComponentPropsWithoutRef<T>, "as" | "children">;
+
+function Box<T extends React.ElementType = "div">({ as, children, ...rest }: BoxProps<T>) {
+  const Component: React.ElementType = as ?? "div";
+  return <Component {...rest}>{children}</Component>;
+}
+
+<Box as="a" href="/x">link</Box>; // href is allowed
+<Box as="div" href="/x">bad</Box>; // error`,
+      follow:"How would you type an event emitter whose event names map to payload types? A generic Record of event name to payload, with keyof.",
+      trap:"Overengineering. Explain the trade-off between flexibility and readable error messages.",
+      src:REPORTED, lang:"tsx" },
+  ]
+}
+];
+
+const topic6Revise = [
+  ["Runtime", "Types are erased. Validate untrusted data with a schema, not an as cast."],
+  ["any / unknown / never", "any turns checking off, unknown forces narrowing, never is the impossible or exhausted case."],
+  ["interface / type", "Interface for extendable object shapes and merging, type for unions, tuples and computed types."],
+  ["Generics", "Type parameters with constraints. keyof plus T[K] is the classic pair."],
+  ["Utility types", "Partial, Required, Readonly, Pick, Omit, Record, Exclude, Extract, NonNullable, ReturnType, Parameters, Awaited."],
+  ["Narrowing", "typeof, instanceof, in, guards, and discriminated unions with a tag."],
+  ["React", "Props type, React.ReactNode, event types, generic state for null and empty arrays, generic list components."]
+];
+
+const topic6Sources = `
+  <p>No TypeScript documentation page was opened while writing, and none was seen as a search excerpt. These are widely reported interview patterns following the TypeScript handbook, which is worth rereading for the utility types and narrowing pages before an interview.</p>
+  <p>Type-level behaviour (distribution, the TSX generic arrow comma, ReturnType of async functions) changes rarely, but check anything you plan to say about a specific compiler version.</p>`;
+const webplatform = [
+{
+  title: "How the browser renders a page",
+  intro: "Often asked as 'what happens when you type a URL', then narrowed to rendering.",
+  qs: [
+    { level:"fresher", q:"Walk through how a browser turns HTML into pixels.",
+      a:`<p>The browser parses HTML into the <strong>DOM</strong> and CSS into the <strong>CSSOM</strong>, combines them into a <strong>render tree</strong> (only visible nodes, with computed styles), runs <strong>layout</strong> to compute sizes and positions, <strong>paints</strong> the pixels into layers, and <strong>composites</strong> the layers on the GPU.</p>
+         <p>Scripts without <code>async</code> or <code>defer</code> block HTML parsing, and CSS blocks rendering, which is why the order and loading strategy of both matter.</p>`,
+      follow:"What is the difference between async and defer? Both download in parallel; async runs as soon as it arrives, defer runs in order after parsing.",
+      trap:"Skipping the CSSOM, or thinking JavaScript can't block rendering.",
+      src:REPORTED },
+    { level:"mid", q:"What is the difference between reflow (layout), repaint and compositing? Which changes are cheapest to animate?",
+      a:`<p>Changing geometry (width, height, top, margin, font size) triggers <strong>layout</strong>, then paint and composite. Changing appearance only (colour, background, box-shadow) triggers <strong>paint</strong> and composite. Changing <code>transform</code> or <code>opacity</code> can be handled on the compositor alone, so animate those. Avoid reading layout values (<code>offsetHeight</code>) right after writing styles in a loop, which forces synchronous layout (layout thrashing).</p>`,
+      follow:"What does will-change do, and why not use it everywhere? It promotes a layer, which costs memory.",
+      trap:"Animating left or top instead of transform.",
+      src:REPORTED },
+    { level:"mid", q:"What happens when you type a URL and press Enter?",
+      a:`<p>Give a structured answer: URL parsing, cache checks, DNS lookup, TCP connection and TLS handshake (or QUIC for HTTP/3), the HTTP request, server processing, the response with caching headers, HTML parsing with subresource fetches (CSS, JS, images), building DOM and CSSOM, layout, paint, JavaScript execution and hydration for a React app. Then pick the stage the interviewer follows up on and go deep.</p>`,
+      follow:"Where do CDNs help? Shorter distance for DNS, TLS and content delivery.",
+      trap:"Listing steps without saying what can be cached or optimised at each.",
+      src:REPORTED },
+  ]
+},
+{
+  title: "DOM, events, and storage",
+  intro: "Storage differences and event details are direct-answer questions; be precise.",
+  qs: [
+    { level:"fresher", q:"Compare cookies, localStorage, sessionStorage and IndexedDB.",
+      a:`<table><thead><tr><th></th><th>Cookie</th><th>localStorage</th><th>sessionStorage</th><th>IndexedDB</th></tr></thead><tbody>
+         <tr><td>Size</td><td>about 4 KB</td><td>about 5 MB</td><td>about 5 MB</td><td>large, quota-based</td></tr>
+         <tr><td>Lifetime</td><td>set by expiry</td><td>until cleared</td><td>the tab session</td><td>until cleared</td></tr>
+         <tr><td>Sent to server</td><td>yes, automatically</td><td>no</td><td>no</td><td>no</td></tr>
+         <tr><td>JS access</td><td>yes, unless HttpOnly</td><td>yes</td><td>yes</td><td>yes</td></tr>
+         <tr><td>API</td><td>string</td><td>sync strings</td><td>sync strings</td><td>async, structured data</td></tr></tbody></table>
+         <p>Storage limits vary by browser; treat the figures as typical. Anything in JS-accessible storage is exposed to XSS.</p>`,
+      follow:"Where would you store a JWT? See the authentication questions. Short answer: an HttpOnly cookie is safer against XSS.",
+      trap:"Storing secrets or tokens in localStorage without acknowledging the XSS exposure.",
+      src:REPORTED },
+    { level:"fresher", q:"What do preventDefault and stopPropagation do, and how do capture and bubble differ?",
+      a:`<p><code>preventDefault()</code> cancels the browser's default action (following a link, submitting a form) but the event still propagates. <code>stopPropagation()</code> stops the event travelling further along the path but doesn't cancel the default. Listeners run in capture order from the window down, then bubble order back up; pass <code>{ capture: true }</code> to listen in the capture phase.</p>`,
+      follow:"What does stopImmediatePropagation add? It also stops other listeners on the same element.",
+      trap:"Using stopPropagation to fix a problem that delegation or a check on event.target would solve.",
+      src:REPORTED },
+    { level:"mid", q:"What is the difference between the DOM and the Shadow DOM, and what are Web Components?",
+      a:`<p>The DOM is the page's document tree. A shadow root attaches an encapsulated subtree to an element: its styles and markup are isolated from the rest of the page (and the outside CSS doesn't leak in). Web Components combine custom elements, shadow DOM and templates so you can ship reusable widgets that work in any framework.</p>`,
+      follow:"Why does styling shadow DOM content need CSS custom properties or ::part? Selectors from outside don't pierce the boundary.",
+      trap:"Saying React components are Web Components.",
+      src:REPORTED },
+    { level:"mid", q:"Explain IntersectionObserver and how you'd use it for lazy loading and infinite scroll.",
+      a:`<p>It calls a callback when a target's visibility relative to a root (default: the viewport) changes, without scroll listeners or forced layout. Put a sentinel element at the end of the list; when it intersects, load the next page. The same idea drives lazy-loaded images and analytics for viewability. For images, native <code>loading="lazy"</code> is often enough.</p>`,
+      code:`function useOnVisible(cb: () => void) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const io = new IntersectionObserver(([entry]) => entry.isIntersecting && cb(), { rootMargin: "200px" });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [cb]);
+  return ref;
+}`,
+      follow:"Why is rootMargin useful? To start loading before the sentinel is actually on screen.",
+      trap:"Adding a scroll listener that measures every item, which causes layout thrashing.",
+      src:REPORTED, lang:"tsx" },
+  ]
+},
+{
+  title: "HTML and accessibility",
+  intro: "Underrated. A candidate who reaches for the right element stands out.",
+  qs: [
+    { level:"fresher", q:"What is semantic HTML, and why use a button instead of a clickable div?",
+      a:`<p>Semantic elements (<code>header</code>, <code>nav</code>, <code>main</code>, <code>section</code>, <code>article</code>, <code>footer</code>, <code>button</code>, <code>a</code>) carry meaning to browsers, search engines and assistive technology. A <code>button</code> gives you keyboard focus, Enter and Space activation, the button role, disabled state and form behaviour for free. A <code>div</code> with an onClick has none of them, and you would have to rebuild all of it with <code>role</code>, <code>tabIndex</code> and key handlers.</p>`,
+      follow:"When do you use a link versus a button? A link navigates to a URL; a button performs an action.",
+      trap:"Adding role='button' and an onClick to a div rather than using a button.",
+      src:REPORTED },
+    { level:"mid", q:"How do you make a custom component, like a modal or dropdown, accessible?",
+      a:`<p>Use the right semantics and manage focus and keyboard behaviour:</p>
+         <ul><li><strong>Modal:</strong> <code>role="dialog"</code> with <code>aria-modal</code> and a label, move focus in on open, trap focus while open, close on Escape, and return focus to the trigger. The native <code>&lt;dialog&gt;</code> element gives much of this.</li>
+         <li><strong>Dropdown / menu / tabs:</strong> follow the WAI-ARIA patterns: <code>aria-expanded</code>, <code>aria-controls</code>, arrow-key navigation, roving tabindex.</li>
+         <li><strong>Announcements:</strong> <code>aria-live</code> regions for toasts and async results.</li></ul>`,
+      follow:"What's the first rule of ARIA? Don't use it if a native element does the job.",
+      trap:"Sprinkling aria-label everywhere without keyboard support behind it.",
+      src:REPORTED },
+    { level:"fresher", q:"What makes a form accessible?",
+      a:`<p>Every input has a visible <code>&lt;label&gt;</code> tied by <code>htmlFor</code>/<code>for</code>. Group related fields with <code>fieldset</code> and <code>legend</code>. Use the correct <code>type</code> and <code>autocomplete</code> values. Associate errors with inputs through <code>aria-describedby</code> and mark them with <code>aria-invalid</code>. Never rely on colour alone, keep visible focus styles, and make the whole form usable by keyboard.</p>`,
+      follow:"Is placeholder a replacement for a label? No; it disappears while typing and often has poor contrast.",
+      trap:"Using placeholder as the only label.",
+      src:REPORTED },
+    { level:"mid", q:"What is alt text for, and what about decorative images and icon buttons?",
+      a:`<p>Meaningful images need concise <code>alt</code> text describing their purpose. Decorative images get an empty <code>alt=""</code> so screen readers skip them. An icon-only button needs an accessible name: visible text, a visually hidden label, or <code>aria-label</code>, and its SVG should be <code>aria-hidden</code>.</p>`,
+      follow:"What contrast ratio does WCAG AA require for body text? 4.5 to 1.",
+      trap:"Omitting alt entirely, so screen readers read the file name.",
+      src:REPORTED },
+  ]
+},
+{
+  title: "CSS",
+  intro: "Layout, specificity and the stacking-context question everyone gets caught by.",
+  qs: [
+    { level:"fresher", q:"Explain the box model and box-sizing.",
+      a:`<p>Every element is a box: content, padding, border, margin. With the default <code>content-box</code>, <code>width</code> sets only the content, so padding and border add to the total. With <code>border-box</code>, <code>width</code> includes padding and border, which is what most resets use: <code>*, *::before, *::after { box-sizing: border-box }</code>. Vertical margins between siblings can collapse into one.</p>`,
+      follow:"When do margins collapse, and when don't they? Adjacent block siblings and parent-child without padding or border; not in flex or grid containers.",
+      trap:"Adding padding to a width: 100% element and wondering why it overflows.",
+      src:REPORTED },
+    { level:"fresher", q:"How does CSS specificity work, and what is the cascade?",
+      a:`<p>The cascade decides which rule wins by: importance (<code>!important</code>), origin, <strong>specificity</strong>, then source order. Specificity is counted as (inline style, IDs, classes/attributes/pseudo-classes, elements/pseudo-elements). One ID beats any number of classes. Cascade layers (<code>@layer</code>) and <code>:where()</code> (zero specificity) help keep it manageable. Some properties inherit (colour, font), others don't (margin, border).</p>`,
+      follow:"Which wins: .a .b or #c? #c, an ID outweighs any number of classes.",
+      trap:"Fixing conflicts with !important and escalating.",
+      src:REPORTED },
+    { level:"fresher", q:"When do you use flexbox versus grid? Centre a div both ways.",
+      a:`<p>Flexbox is one-dimensional: distribute items in a row or a column. Grid is two-dimensional: define rows and columns together, for page layouts and card grids. They combine well: grid for the page, flex inside components.</p>`,
+      code:`.center-flex { display: flex; justify-content: center; align-items: center; }
+.center-grid { display: grid; place-items: center; }
+
+.cards { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }`,
+      follow:"What do flex: 1, flex-grow, flex-shrink and flex-basis mean?",
+      trap:"Using floats or absolute positioning for layout.",
+      src:REPORTED, lang:"css" },
+    { level:"mid", q:"Explain position values, stacking context and z-index.",
+      a:`<p><code>static</code> is normal flow; <code>relative</code> offsets from its normal position and anchors absolute children; <code>absolute</code> positions against the nearest positioned ancestor; <code>fixed</code> against the viewport; <code>sticky</code> toggles between relative and fixed as you scroll.</p>
+         <p><code>z-index</code> only orders elements <em>within the same stacking context</em>. A new context is created by a positioned element with a z-index, and also by <code>opacity &lt; 1</code>, <code>transform</code>, <code>filter</code> and <code>isolation: isolate</code>. That is why <code>z-index: 9999</code> sometimes has no effect on a modal: it is trapped in a lower context.</p>`,
+      follow:"How do you fix a dropdown clipped by an overflow: hidden parent? Portal it to the body (React createPortal).",
+      trap:"Raising z-index numbers instead of finding the stacking context.",
+      src:REPORTED },
+    { level:"fresher", q:"How do you build responsive layouts? What are mobile-first and container queries?",
+      a:`<p>Use fluid units (<code>%</code>, <code>rem</code>, <code>vw</code>, <code>clamp()</code>), flexible layouts (flex, grid with <code>auto-fit</code>), and media queries at content-driven breakpoints. Mobile-first means the base styles target small screens and <code>min-width</code> queries add complexity for larger ones. Container queries (<code>@container</code>) let a component adapt to the width of its parent instead of the viewport, so it works wherever it is placed. Always include the viewport meta tag.</p>`,
+      code:`.card-grid { display: grid; gap: 1rem; }
+@media (min-width: 700px) { .card-grid { grid-template-columns: repeat(2, 1fr); } }
+
+h1 { font-size: clamp(1.75rem, 4vw, 3rem); }`,
+      follow:"rem versus em versus px? rem scales from the root font size, em from the element's own.",
+      trap:"Designing desktop first and cramming it onto mobile with overrides.",
+      src:REPORTED, lang:"css" },
+    { level:"mid", q:"What are CSS variables, and how do you handle theming, transitions and animations?",
+      a:`<p>Custom properties (<code>--accent: #2D6CB5</code>, used as <code>var(--accent)</code>) cascade and can change at runtime, which makes light and dark themes a matter of overriding them on <code>:root</code> or a <code>[data-theme]</code> attribute, and honouring <code>prefers-color-scheme</code>. Transitions animate a property change; keyframe animations run a sequence. Prefer animating <code>transform</code> and <code>opacity</code>, and respect <code>prefers-reduced-motion</code>.</p>`,
+      follow:"How are CSS variables different from Sass variables? They exist at runtime and follow the cascade.",
+      trap:"Ignoring reduced-motion preferences.",
+      src:REPORTED },
+  ]
+}
+];
+
+const topic7Revise = [
+  ["Rendering path", "DOM plus CSSOM, render tree, layout, paint, composite. Scripts and CSS can block."],
+  ["Cheap animation", "transform and opacity skip layout and paint. Avoid animating geometry."],
+  ["Storage", "Cookie 4 KB and sent with requests, local and session about 5 MB, IndexedDB for structured data. JS-readable storage is exposed to XSS."],
+  ["Events", "Capture down, bubble up. preventDefault cancels the action, stopPropagation stops travel. Delegate with closest()."],
+  ["HTML", "Right element first, ARIA second. Labels, focus, keyboard, contrast."],
+  ["CSS", "border-box, specificity counts, grid for two dimensions, flex for one, z-index lives inside a stacking context."]
+];
+
+const topic7Sources = `
+  <p>No page in this topic was opened while writing, and none was seen as a search excerpt. These are widely reported interview patterns. Storage sizes, the WCAG contrast ratio and CSS behaviour follow MDN, web.dev and the WAI-ARIA Authoring Practices, which were not reopened for them; browser storage limits in particular vary, so the table gives typical figures.</p>`;
+const network = [
+{
+  title: "HTTP and REST",
+  intro: "Every frontend engineer is expected to read a network tab fluently.",
+  qs: [
+    { level:"fresher", q:"What are the HTTP methods, and which are safe or idempotent?",
+      a:`<table><thead><tr><th>Method</th><th>Use</th><th>Safe</th><th>Idempotent</th></tr></thead><tbody>
+         <tr><td>GET</td><td>read</td><td>yes</td><td>yes</td></tr>
+         <tr><td>POST</td><td>create, or run an action</td><td>no</td><td>no</td></tr>
+         <tr><td>PUT</td><td>replace a resource</td><td>no</td><td>yes</td></tr>
+         <tr><td>PATCH</td><td>partial update</td><td>no</td><td>not guaranteed</td></tr>
+         <tr><td>DELETE</td><td>remove</td><td>no</td><td>yes</td></tr></tbody></table>
+         <p>Idempotent means repeating the request leaves the server in the same state, which is what makes retries safe.</p>`,
+      follow:"PUT versus PATCH? Full replacement versus partial change.",
+      trap:"Using GET for actions that change data, or saying POST is idempotent.",
+      src:REPORTED },
+    { level:"fresher", q:"Which HTTP status codes must you know, and what do they mean?",
+      a:`<table><thead><tr><th>Code</th><th>Meaning</th></tr></thead><tbody>
+         <tr><td>200 / 201 / 204</td><td>OK / created / success with no body</td></tr>
+         <tr><td>301 / 302 / 304</td><td>permanent redirect / temporary redirect / not modified (use the cache)</td></tr>
+         <tr><td>400 / 401 / 403 / 404</td><td>bad request / not authenticated / not allowed / not found</td></tr>
+         <tr><td>409 / 429</td><td>conflict / too many requests (rate limited)</td></tr>
+         <tr><td>500 / 502 / 503</td><td>server error / bad gateway / service unavailable</td></tr></tbody></table>`,
+      follow:"401 versus 403? 401 means we don't know who you are; 403 means we know, and you aren't allowed.",
+      trap:"Mixing up 401 and 403, the most common slip.",
+      src:REPORTED },
+    { level:"fresher", q:"What are the main REST principles, and how do you handle pagination, filtering and sorting?",
+      a:`<p>Resources identified by URLs (nouns, not verbs), standard HTTP methods, stateless requests, representations such as JSON, and correct status codes. For collections use query parameters: <code>?page=2&amp;limit=20&amp;sort=-createdAt&amp;status=open</code>. <strong>Offset pagination</strong> is simple but slow on big tables and unstable if data changes; <strong>cursor pagination</strong> (<code>?after=abc</code>) is stable and efficient, and is the right fit for infinite scroll.</p>`,
+      follow:"What are ETag and If-None-Match for? Conditional requests: the server returns 304 if nothing changed.",
+      trap:"Designing verb URLs such as /getUsers or /deleteUser.",
+      src:REPORTED },
+    { level:"mid", q:"How does HTTP caching work? Explain Cache-Control, ETag and stale-while-revalidate.",
+      a:`<p><code>Cache-Control: max-age=N</code> lets the browser reuse a response without asking for N seconds. <code>no-cache</code> means store it but revalidate every time; <code>no-store</code> means don't store it at all. Revalidation uses <code>ETag</code> with <code>If-None-Match</code> (or <code>Last-Modified</code>) and gets a cheap 304. <code>stale-while-revalidate</code> serves the cached copy immediately while refreshing in the background. For fingerprinted assets (<code>app.3f9a.js</code>) use a long max-age with <code>immutable</code>; keep HTML on a short or revalidated policy.</p>`,
+      follow:"Why do bundlers put hashes in file names? So a new deploy is a new URL and long caching is safe.",
+      trap:"Saying no-cache means don't cache.",
+      src:REPORTED },
+    { level:"mid", q:"Compare polling, long polling, Server-Sent Events and WebSockets.",
+      a:`<ul><li><strong>Polling:</strong> ask repeatedly. Simple, wasteful.</li>
+         <li><strong>Long polling:</strong> the server holds the request until there is data. Fewer wasted calls, still one request per event.</li>
+         <li><strong>SSE:</strong> one-way server-to-client stream over HTTP, with automatic reconnect. Good for notifications and feeds.</li>
+         <li><strong>WebSocket:</strong> a persistent two-way channel. Good for chat, collaboration and games; you handle reconnection, heartbeats and backpressure yourself.</li></ul>`,
+      follow:"Which would you choose for a stock ticker? A one-way stream (SSE), unless the client also sends frequent messages.",
+      trap:"Defaulting to WebSockets when a one-way stream would do.",
+      src:REPORTED },
+  ]
+},
+{
+  title: "Authentication",
+  intro: "Frontend rounds ask where tokens live and how sessions end.",
+  qs: [
+    { level:"fresher", q:"Explain session-based versus token-based (JWT) authentication.",
+      a:`<p><strong>Sessions:</strong> the server stores session data and gives the browser an id in a cookie; each request is looked up server-side. Easy to revoke, needs shared session storage when scaled out. <strong>JWT:</strong> the server signs a self-contained token with claims; any service can verify the signature without a lookup. Hard to revoke before expiry, so keep access tokens short-lived. A JWT is signed, not encrypted: anyone can read its payload.</p>`,
+      follow:"Authentication versus authorisation? Who you are versus what you may do.",
+      trap:"Putting sensitive data in a JWT because 'it is encoded'.",
+      src:REPORTED },
+    { level:"mid", q:"How do access and refresh tokens work, and where should you store them in a browser app?",
+      a:`<p>The access token is short-lived (minutes) and sent with each API call. The refresh token is long-lived and used only to get a new access token, ideally with rotation. In the browser, the safest common approach is an <code>HttpOnly</code>, <code>Secure</code>, <code>SameSite</code> cookie for the refresh token (JavaScript cannot read it, which limits XSS theft), and keeping the access token in memory. <code>localStorage</code> is convenient but readable by any injected script. Cookies bring CSRF concerns that <code>SameSite</code> and CSRF tokens address.</p>`,
+      follow:"How do you handle a 401 in an Axios interceptor? Refresh once, queue concurrent requests behind it, retry, and log out if refresh fails.",
+      trap:"Firing multiple simultaneous refresh calls when several requests fail at once.",
+      src:REPORTED },
+    { level:"mid", q:"How do you implement logout and token expiry handling on the client?",
+      a:`<p>Clear in-memory tokens and cached user data (including query caches), call the logout endpoint so the server can clear the cookie or revoke the refresh token, and redirect to login. On expiry, an interceptor should refresh transparently and fall back to logout if it fails. Sync logout across tabs with the <code>storage</code> event or <code>BroadcastChannel</code>.</p>`,
+      follow:"How do you prevent showing the previous user's data after logout? Reset all client caches.",
+      trap:"Clearing only the token and leaving cached data for the next user of the device.",
+      src:REPORTED },
+    { level:"senior", q:"Explain OAuth 2.0 with PKCE and OpenID Connect in a sentence each.",
+      a:`<p><strong>OAuth 2.0</strong> lets an app get limited access to an API on a user's behalf through an authorisation server, without seeing their password. <strong>PKCE</strong> protects the authorisation-code flow for public clients (SPAs, mobile) by binding the code to a one-time verifier, so an intercepted code is useless. <strong>OpenID Connect</strong> adds an identity layer on top, an ID token that says who the user is.</p>`,
+      follow:"Why is the implicit flow discouraged? Tokens appear in the URL, and there is no code exchange to protect.",
+      trap:"Calling OAuth an authentication protocol. OIDC is the authentication layer.",
+      src:REPORTED },
+  ]
+},
+{
+  title: "Web security",
+  intro: "The 'CORS, CSRF, XSS: what is the difference?' question appears everywhere.",
+  qs: [
+    { level:"fresher", q:"What is the difference between XSS, CSRF and CORS?",
+      a:`<table><thead><tr><th></th><th>What it is</th><th>Main defence</th></tr></thead><tbody>
+         <tr><td><strong>XSS</strong></td><td>attacker's script runs in your page, with your origin's privileges</td><td>escape or sanitise output, CSP, avoid <code>dangerouslySetInnerHTML</code>, HttpOnly cookies</td></tr>
+         <tr><td><strong>CSRF</strong></td><td>another site makes the browser send an authenticated request to yours, because cookies attach automatically</td><td><code>SameSite</code> cookies, CSRF tokens, checking Origin</td></tr>
+         <tr><td><strong>CORS</strong></td><td>not an attack: the browser mechanism that decides whether a page from one origin may read a response from another</td><td>server sends the right <code>Access-Control-*</code> headers</td></tr></tbody></table>`,
+      follow:"Is CORS a server-side security feature? No; it is enforced by the browser, and curl ignores it.",
+      trap:"Describing CORS as protection against attackers. It protects users' browsers from cross-origin reads, and does not stop a request being sent.",
+      src:REPORTED },
+    { level:"fresher", q:"How does React protect against XSS, and where can it still happen?",
+      a:`<p>React escapes values placed in JSX by default, so <code>{userInput}</code> renders as text. XSS still appears through <code>dangerouslySetInnerHTML</code>, <code>href</code> or <code>src</code> values such as <code>javascript:</code> URLs, server-rendered HTML you inject, third-party scripts, and DOM APIs like <code>innerHTML</code>. Sanitise any HTML with a library (DOMPurify), validate URL schemes, and set a Content Security Policy.</p>`,
+      follow:"What does a Content Security Policy do? It restricts which sources scripts, styles and other resources may load from.",
+      trap:"Believing React makes XSS impossible.",
+      src:REPORTED_REACT },
+    { level:"mid", q:"Explain the CORS preflight and how cookies work with CORS.",
+      a:`<p>For 'non-simple' requests (methods like PUT or DELETE, custom headers, or JSON content type), the browser first sends an <code>OPTIONS</code> preflight asking whether the real request is allowed. The server answers with <code>Access-Control-Allow-Origin</code>, <code>-Methods</code> and <code>-Headers</code>, and can cache it with <code>Access-Control-Max-Age</code>. To send cookies cross-origin, the client sets <code>credentials: "include"</code> and the server must return the exact origin (not <code>*</code>) plus <code>Access-Control-Allow-Credentials: true</code>.</p>`,
+      follow:"How do you avoid CORS in development? A dev-server proxy, so the browser sees a same-origin request.",
+      trap:"Fixing CORS errors with Access-Control-Allow-Origin: * everywhere, which also breaks credentialed requests.",
+      src:REPORTED },
+    { level:"mid", q:"What do the HttpOnly, Secure and SameSite cookie flags do?",
+      a:`<ul><li><code>HttpOnly</code>: JavaScript can't read the cookie, limiting theft through XSS.</li>
+         <li><code>Secure</code>: only sent over HTTPS.</li>
+         <li><code>SameSite</code>: <code>Strict</code> never sends it cross-site; <code>Lax</code> sends it on top-level navigations only (the modern default); <code>None</code> always sends it and requires <code>Secure</code>.</li></ul>`,
+      follow:"What else reduces clickjacking? Frame-ancestors in CSP or X-Frame-Options.",
+      trap:"Assuming HttpOnly protects against CSRF. It doesn't.",
+      src:REPORTED },
+  ]
+},
+{
+  title: "Performance and Core Web Vitals",
+  intro: "'A page is slow. What do you do?' has a structured answer.",
+  qs: [
+    { level:"fresher", q:"What are the Core Web Vitals?",
+      a:`<p>Three user-centred metrics: <strong>LCP</strong> (Largest Contentful Paint) measures loading, how soon the main content appears; <strong>INP</strong> (Interaction to Next Paint, which replaced FID) measures responsiveness to input; <strong>CLS</strong> (Cumulative Layout Shift) measures visual stability. Google's published "good" thresholds are roughly 2.5 s for LCP, 200 ms for INP and 0.1 for CLS; check the current figures before quoting them.</p>`,
+      follow:"What commonly causes bad CLS? Images without dimensions, late-injected banners and web fonts swapping.",
+      trap:"Still saying FID.",
+      src:REPORTED },
+    { level:"mid", q:"How would you investigate and improve a slow website?",
+      a:`<p>Measure, then fix the largest cost. Use Lighthouse, the Performance and Network panels, and real-user monitoring.</p>
+         <ul><li><strong>Load:</strong> compress and resize images (modern formats, <code>srcset</code>), preload the LCP resource, use a CDN and Brotli or gzip, cache with fingerprinted URLs, and remove render-blocking CSS and JS.</li>
+         <li><strong>Bundle:</strong> analyse it, tree shake, code split by route, drop heavy dependencies.</li>
+         <li><strong>Runtime:</strong> break up long tasks, virtualise lists, avoid layout thrashing, move heavy work to a worker.</li>
+         <li><strong>Network:</strong> reduce request waterfalls, preconnect to critical origins, prefetch likely next pages.</li></ul>`,
+      follow:"Server-side rendering versus client-side rendering for performance? SSR improves first paint and SEO at the cost of hydration work and server complexity.",
+      trap:"Listing techniques without saying how you'd measure the effect.",
+      src:REPORTED },
+    { level:"mid", q:"Explain preload, prefetch and preconnect, plus lazy loading images.",
+      a:`<p><code>preload</code> fetches a resource needed on this page early (the hero image, a font). <code>prefetch</code> fetches something likely needed for a future navigation at low priority. <code>preconnect</code> opens the connection (DNS, TCP, TLS) to another origin ahead of time. Images below the fold use <code>loading="lazy"</code>; the LCP image should not be lazy, and should have explicit width and height to avoid layout shift.</p>`,
+      follow:"What does fetchpriority='high' do? It hints that a resource should be fetched sooner.",
+      trap:"Lazy loading the hero image.",
+      src:REPORTED },
+  ]
+}
+];
+
+const topic8Revise = [
+  ["Methods", "GET, PUT, DELETE idempotent; POST not; only GET is safe."],
+  ["Status codes", "200, 201, 204, 301, 302, 304, 400, 401 versus 403, 404, 409, 429, 500, 502, 503."],
+  ["Caching", "max-age reuse, no-cache revalidates, no-store never stores, ETag gives 304, hashed filenames allow long caching."],
+  ["Tokens", "Short access token in memory, refresh token in an HttpOnly Secure SameSite cookie. JWT is signed, not secret."],
+  ["XSS / CSRF / CORS", "Injected script; forged authenticated request; browser rule for cross-origin reads."],
+  ["Vitals", "LCP loading, INP responsiveness, CLS stability. Measure before optimising."]
+];
+
+const topic8Sources = `
+  <p>No page in this topic was opened while writing, and none was seen as a search excerpt. These are widely reported interview patterns. HTTP, CORS and cookie behaviour follow the relevant RFCs and MDN; Core Web Vitals thresholds and SameSite defaults change over time, so confirm them on web.dev and MDN before you quote numbers.</p>`;
+const machine = [
+{
+  title: "Machine coding rounds",
+  intro: "A 60 to 90 minute build in a blank project. Structure and edge cases matter as much as features.",
+  qs: [
+    { level:"fresher", q:"How do you approach a machine-coding round?",
+      a:`<p>Spend the first five minutes clarifying scope and stating assumptions, then follow a fixed order:</p>
+         <ol><li>Sketch the component tree and the shape of the state before typing.</li>
+         <li>Get the happy path working end to end with hard-coded data.</li>
+         <li>Then add loading, empty and error states, validation, and keyboard support.</li>
+         <li>Finish with cleanup: naming, extracting a component or hook, and a short note on what you'd do next.</li></ol>
+         <p>Interviewers score structure, reusability, edge cases, accessibility, performance and, for TypeScript rounds, sensible types.</p>`,
+      follow:"What do you do when you run out of time? Say what is left and why, and leave working code, not half of everything.",
+      trap:"Starting with styling or a library setup. A working, ugly feature beats a beautiful, broken one.",
+      src:REPORTED },
+    { level:"fresher", q:"Build a todo list. What edge cases separate a good solution from an average one?",
+      a:`<p>Add, toggle, delete, filter, and persist. Edge cases interviewers check: empty or whitespace-only input, trimming, Enter key to add, stable ids (not the index), editing in place, not mutating state, focus returning to the input, an empty-state message, and persistence with a safe <code>localStorage</code> read.</p>`,
+      code:`type Todo = { id: string; text: string; done: boolean };
+
+function TodoApp() {
+  const [todos, setTodos] = useState<Todo[]>([]);
+  const [text, setText] = useState("");
+
+  function add(e: React.FormEvent) {
+    e.preventDefault();
+    const t = text.trim();
+    if (!t) return;
+    setTodos((xs) => [...xs, { id: crypto.randomUUID(), text: t, done: false }]);
+    setText("");
+  }
+  const toggle = (id: string) =>
+    setTodos((xs) => xs.map((x) => (x.id === id ? { ...x, done: !x.done } : x)));
+  const remove = (id: string) => setTodos((xs) => xs.filter((x) => x.id !== id));
+
+  return (
+    <form onSubmit={add}>
+      <input value={text} onChange={(e) => setText(e.target.value)} aria-label="New todo" />
+      <button type="submit">Add</button>
+      {todos.length === 0 && <p>Nothing to do.</p>}
+      <ul>{todos.map((t) => (
+        <li key={t.id}>
+          <label><input type="checkbox" checked={t.done} onChange={() => toggle(t.id)} /> {t.text}</label>
+          <button type="button" onClick={() => remove(t.id)} aria-label={"Delete " + t.text}>x</button>
+        </li>
+      ))}</ul>
+    </form>
+  );
+}`,
+      follow:"How would you add undo? Keep history in a reducer, or store past and future stacks.",
+      trap:"Using Date.now() or the index as the id, or skipping the empty state.",
+      src:REPORTED, lang:"tsx" },
+    { level:"mid", q:"Build a search-as-you-type autocomplete. What matters?",
+      a:`<p>Debounce input, cancel or ignore stale requests, show loading, empty and error states, cache repeated queries, keyboard navigation (arrows, Enter, Escape), highlight the match, and use the combobox ARIA pattern. Handle the empty query without a request.</p>`,
+      code:`function Autocomplete() {
+  const [q, setQ] = useState("");
+  const dq = useDebounce(q.trim(), 300);
+  const [items, setItems] = useState<string[]>([]);
+  const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
+
+  useEffect(() => {
+    if (!dq) { setItems([]); setStatus("idle"); return; }
+    const ctrl = new AbortController();
+    setStatus("loading");
+    fetch("/api/search?q=" + encodeURIComponent(dq), { signal: ctrl.signal })
+      .then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
+      .then((data: string[]) => { setItems(data); setStatus("idle"); })
+      .catch((e) => { if (e.name !== "AbortError") setStatus("error"); });
+    return () => ctrl.abort();
+  }, [dq]);
+
+  return (
+    <div>
+      <input role="combobox" aria-expanded={items.length > 0} aria-controls="results"
+             value={q} onChange={(e) => setQ(e.target.value)} />
+      {status === "loading" && <p>Searching...</p>}
+      {status === "error" && <p role="alert">Something went wrong.</p>}
+      <ul id="results" role="listbox">{items.map((i) => <li role="option" key={i}>{i}</li>)}</ul>
+    </div>
+  );
+}`,
+      follow:"How would you add a cache? A Map keyed by query, or let TanStack Query do it.",
+      trap:"Firing a request on every keystroke and letting a slow old response overwrite a newer one.",
+      src:REPORTED, lang:"tsx" },
+    { level:"mid", q:"Build infinite scroll and a paginated table.",
+      a:`<p><strong>Infinite scroll:</strong> an IntersectionObserver on a sentinel at the list's end, a guard against concurrent loads, a cursor or page number, an end-of-list flag, error with retry, and optionally virtualisation as the list grows.</p>
+         <p><strong>Pagination:</strong> keep page and page size in the URL, disable controls at the bounds, show loading without flashing the table empty (keep previous data), and handle a total that shrinks.</p>`,
+      code:`function useInfinite<T>(load: (page: number) => Promise<T[]>) {
+  const [items, setItems] = useState<T[]>([]);
+  const [page, setPage] = useState(0);
+  const [done, setDone] = useState(false);
+  const busy = useRef(false);
+
+  const loadMore = useCallback(async () => {
+    if (busy.current || done) return;
+    busy.current = true;
+    try {
+      const next = await load(page);
+      setItems((xs) => [...xs, ...next]);
+      setPage((p) => p + 1);
+      if (next.length === 0) setDone(true);
+    } finally { busy.current = false; }
+  }, [load, page, done]);
+
+  return { items, loadMore, done };
+}`,
+      follow:"Why a ref for the busy flag rather than state? It must change immediately, without waiting for a render.",
+      trap:"Triggering several loads at once as the sentinel flickers in and out of view.",
+      src:REPORTED, lang:"tsx" },
+    { level:"mid", q:"Build a modal, accordion, tabs or dropdown as a reusable component. What do you get right?",
+      a:`<p>Prefer composition and controlled or uncontrolled modes, keyboard and ARIA support, and closing behaviours:</p>
+         <ul><li><strong>Modal:</strong> render in a portal, trap and restore focus, close on Escape and backdrop click, lock body scroll.</li>
+         <li><strong>Accordion / tabs:</strong> a single open item or many, arrow-key navigation, <code>aria-expanded</code>, <code>role="tablist"</code>.</li>
+         <li><strong>Dropdown / tooltip:</strong> close on outside click and Escape, position with flip logic, cleanup listeners.</li></ul>`,
+      code:`function useClickOutside(ref: React.RefObject<HTMLElement>, onOutside: () => void) {
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onOutside();
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [ref, onOutside]);
+}`,
+      follow:"What's the risk of an inline onOutside function in the dependency array? The effect re-subscribes on every render.",
+      trap:"Forgetting to remove listeners or restore focus on close.",
+      src:REPORTED, lang:"tsx" },
+    { level:"mid", q:"How do you build a toast or notification system?",
+      a:`<p>A provider holding a queue in state (or a small external store), an <code>addToast</code> function exposed through a hook, unique ids, auto-dismiss timers that are cleaned up, pause on hover, a maximum visible count, an <code>aria-live</code> region so screen readers announce them, and a portal so they sit above everything. Keep the API imperative-friendly: <code>toast.success("Saved")</code>.</p>`,
+      follow:"Why a portal? To escape parent overflow and stacking contexts.",
+      trap:"Timers left running after a toast is dismissed or the provider unmounts.",
+      src:REPORTED },
+    { level:"senior", q:"Build a Kanban board, file explorer or multi-step form. How do you structure the state?",
+      a:`<p>Normalise. For a Kanban board, hold <code>cards</code> keyed by id and <code>columns</code> as ordered id arrays, so moving a card is two array edits rather than a deep tree rewrite. For a file explorer, keep a flat map with parent ids or a recursive component with per-node expanded state. For a multi-step form, keep one form state object in the parent (or a reducer), validate per step, allow back navigation without losing data, and reflect the step in the URL.</p>`,
+      follow:"How would you add drag and drop accessibly? Native HTML5 DnD is limited; dnd-kit supports keyboard and touch.",
+      trap:"Deeply nested state that makes every update a spread-of-a-spread.",
+      src:REPORTED },
+  ]
+},
+{
+  title: "Frontend system design",
+  intro: "More weight for SDE-2 and above. Talk in layers: requirements, architecture, data, performance.",
+  qs: [
+    { level:"mid", q:"How do you structure an answer to a frontend system design question?",
+      a:`<p>Use a repeatable outline:</p>
+         <ol><li><strong>Requirements:</strong> functional scope, users, devices, scale, and non-functional needs (performance, accessibility, offline, i18n).</li>
+         <li><strong>Architecture:</strong> rendering strategy (CSR, SSR, SSG), component tree, module boundaries.</li>
+         <li><strong>Data:</strong> API shape, pagination, caching, state split between server and client.</li>
+         <li><strong>Interaction:</strong> optimistic updates, real-time channels, error and loading states.</li>
+         <li><strong>Quality:</strong> performance budget, accessibility, security, observability, testing.</li>
+         <li><strong>Trade-offs:</strong> what you chose, what you rejected and why.</li></ol>`,
+      follow:"Which do you draw first, components or data? Start from what the user sees, then the data behind each region.",
+      trap:"Jumping straight to a library list without stating requirements.",
+      src:REPORTED },
+    { level:"senior", q:"Design a news feed or social media feed.",
+      a:`<p>Key decisions:</p>
+         <ul><li><strong>Loading:</strong> cursor-based pagination and infinite scroll with a sentinel; virtualise once the list is long; skeletons for perceived speed.</li>
+         <li><strong>State:</strong> a normalised cache (post entities by id), with server state in a query library and only UI state (composer open) local.</li>
+         <li><strong>Updates:</strong> optimistic likes and comments with rollback; a "new posts" pill fed by polling or SSE rather than jumping the list.</li>
+         <li><strong>Performance:</strong> lazy-load images with dimensions, prefetch the next page, code split the composer and media viewer.</li>
+         <li><strong>Other:</strong> accessibility of the feed landmark, deduplication across pages, and error and empty states.</li></ul>`,
+      follow:"How do you keep scroll position when navigating away and back? Cache the pages and restore the offset.",
+      trap:"Offset pagination on a feed whose items are constantly being inserted at the top.",
+      src:REPORTED },
+    { level:"senior", q:"Design a chat application's frontend.",
+      a:`<p>A WebSocket for real-time messages, with reconnection and backoff, and a heartbeat. On reconnect, fetch missed messages using the last seen id. Optimistic sends with a local id, status (sending, sent, failed) and retry. A virtualised message list that anchors to the bottom and keeps position when older messages load at the top. Typing indicators and presence throttled, unread counts, and message ordering by server timestamp or sequence. Accessibility: live region for new messages, keyboard send.</p>`,
+      follow:"How do you avoid duplicate messages? Reconcile the optimistic local id with the server id.",
+      trap:"Ignoring reconnection and ordering, which is where real chat apps fail.",
+      src:REPORTED },
+    { level:"senior", q:"Design a file upload system and a large data table.",
+      a:`<p><strong>Upload:</strong> validate type and size client-side, upload directly to object storage with presigned URLs, chunk large files with resumable uploads, show progress per file (XHR or fetch streams), allow cancel and retry, limit concurrency, and generate previews with object URLs.</p>
+         <p><strong>Large table:</strong> server-side pagination, sorting and filtering, row virtualisation, column virtualisation for wide tables, sticky headers, debounced filters, memoised rows with stable keys, and accessible table semantics. Export runs on the server for huge sets.</p>`,
+      follow:"What happens if the tab closes mid-upload? Resume from the last confirmed chunk.",
+      trap:"Loading the whole dataset into the browser and filtering client-side.",
+      src:REPORTED },
+    { level:"senior", q:"What are micro-frontends, and when would you avoid them?",
+      a:`<p>Splitting a large frontend into independently built and deployed pieces owned by separate teams, composed at build time, on the server, or at runtime (for example with Module Federation). Benefits: team autonomy and independent releases. Costs: duplicated dependencies and bundle size, inconsistent UX, shared-state and routing complexity, and harder debugging. Avoid them for small teams or apps; a modular monorepo usually gives most of the benefit.</p>`,
+      follow:"How do teams share a design system? A versioned package of components and tokens.",
+      trap:"Recommending them as the default for any large app.",
+      src:REPORTED },
+  ]
+},
+{
+  title: "Testing, tooling, and version control",
+  intro: "Lower priority than the rest, but expected of anyone claiming production experience.",
+  qs: [
+    { level:"mid", q:"How do you test React components? What is the testing philosophy behind React Testing Library?",
+      a:`<p>Test behaviour the way a user experiences it, not implementation details. Render the component, query by role, label or text (<code>getByRole</code> first), interact with <code>user-event</code>, and assert on what appears. Await async changes with <code>findBy</code> or <code>waitFor</code>, and mock the network boundary (for example with MSW) rather than internal functions. Avoid asserting on state, internal method calls, or snapshots of large trees.</p>`,
+      code:`test("adds a todo", async () => {
+  const user = userEvent.setup();
+  render(<TodoApp />);
+
+  await user.type(screen.getByLabelText(/new todo/i), "Buy milk");
+  await user.click(screen.getByRole("button", { name: /add/i }));
+
+  expect(screen.getByText("Buy milk")).toBeInTheDocument();
+});`,
+      follow:"getBy versus queryBy versus findBy? Throws if missing; returns null; waits asynchronously.",
+      trap:"Testing that setState was called instead of what the user sees.",
+      src:REPORTED, lang:"tsx" },
+    { level:"mid", q:"What are unit, integration and end-to-end tests? Where do Jest, Vitest, Playwright and Cypress fit?",
+      a:`<p><strong>Unit:</strong> one function or component in isolation; fast and numerous. <strong>Integration:</strong> several units together, such as a form with its validation and API layer; the best value for UI code. <strong>End-to-end:</strong> a real browser against a running app; slow, few, covering critical journeys. Jest and Vitest run unit and integration tests (Vitest is native to Vite); Playwright and Cypress drive E2E tests. Mocking, spies and test isolation keep tests deterministic.</p>`,
+      follow:"What makes E2E tests flaky, and what do you do about it? Timing and shared data; use auto-waiting, isolated data and no fixed sleeps.",
+      trap:"Only unit testing, or only E2E testing.",
+      src:REPORTED },
+    { level:"mid", q:"What do package.json, the lockfile and semantic versioning do? What is the difference between dependencies and devDependencies?",
+      a:`<p><code>package.json</code> declares the project, scripts and version ranges. The lockfile records the exact resolved tree so installs are reproducible; commit it and use <code>npm ci</code> in CI. Semver is MAJOR.MINOR.PATCH: <code>^1.2.3</code> allows minor and patch updates, <code>~1.2.3</code> only patches. <code>devDependencies</code> are needed for building and testing; <code>dependencies</code> are needed at runtime. For a browser bundle the distinction matters less, since the bundler decides what ships.</p>`,
+      follow:"What are peer dependencies? A library states that the host app must supply a compatible copy, like react.",
+      trap:"Deleting the lockfile to fix an install problem.",
+      src:REPORTED },
+    { level:"mid", q:"What do bundlers like Vite and Webpack do? Explain tree shaking, code splitting and environment variables.",
+      a:`<p>A bundler resolves imports, transforms code and assets (through loaders or plugins), and emits optimised files. <strong>Tree shaking</strong> removes unused ES module exports (needs static <code>import</code> syntax and side-effect-free modules). <strong>Code splitting</strong> turns dynamic <code>import()</code> into separate chunks. Vite serves source over native ES modules in development for very fast startup and bundles with Rollup for production; Webpack bundles in both and is still common in older enterprise codebases. Env variables are substituted at build time, so they end up in the bundle: never put secrets in them.</p>`,
+      follow:"Why is Vite's dev server faster? It doesn't bundle up front and transforms files on demand.",
+      trap:"Putting an API secret in a VITE_ or REACT_APP_ variable.",
+      src:REPORTED },
+    { level:"fresher", q:"You have conflicts after a rebase. What do you do? And what's the difference between merge and rebase?",
+      a:`<p>Git stops at the conflicting commit. Open each conflicted file, decide what the final code should be (check both sides and ask the author if unsure), remove the markers, then <code>git add</code> the files and <code>git rebase --continue</code>. If it goes badly, <code>git rebase --abort</code> restores the previous state. Run the tests before pushing.</p>
+         <p><strong>Merge</strong> joins histories with a merge commit and preserves what happened. <strong>Rebase</strong> replays your commits on top of another branch for a linear history, but rewrites them, so never rebase commits others have based work on.</p>`,
+      follow:"When do you use revert versus reset? Revert adds an undoing commit and is safe on shared branches; reset moves the branch and rewrites history.",
+      trap:"Force-pushing a shared branch after a rebase.",
+      src:REPORTED },
+    { level:"fresher", q:"Explain fetch versus pull, stash and cherry-pick.",
+      a:`<p><code>fetch</code> downloads remote changes without touching your branch; <code>pull</code> is fetch plus merge (or rebase). <code>stash</code> parks uncommitted work so you can switch branches, and <code>stash pop</code> restores it. <code>cherry-pick &lt;sha&gt;</code> copies one commit onto the current branch, handy for a hotfix.</p>`,
+      follow:"How do you undo the last commit but keep the changes? git reset --soft HEAD~1.",
+      trap:"Using git reset --hard without checking what would be lost.",
+      src:REPORTED },
+  ]
+},
+{
+  title: "DSA for frontend interviews",
+  intro: "Lighter than backend rounds, but not skipped. The sheet in the DSA track covers the patterns in depth.",
+  qs: [
+    { level:"fresher", q:"Which data structures and algorithms come up most in frontend rounds, and how should you prepare?",
+      a:`<p>The recurring set: arrays and strings (two pointers, sliding window, prefix sums), hash maps and sets (frequency counts, anagrams, two-sum), stacks (valid parentheses, monotonic stack basics), queues, linked lists (reverse, fast and slow pointers), trees (DFS and BFS, which is also how you walk the DOM), and basic recursion and backtracking. Always state time and space complexity. Practise in JavaScript or TypeScript, and be ready to implement utility functions such as flatten, deep clone, deep equal and a simple event emitter.</p>`,
+      code:`function flatten(arr: unknown[], depth = Infinity): unknown[] {
+  return depth < 1
+    ? arr.slice()
+    : arr.reduce<unknown[]>(
+        (acc, x) => (Array.isArray(x) ? acc.concat(flatten(x, depth - 1)) : (acc.push(x), acc)),
+        []
+      );
+}
+
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (typeof a !== "object" || typeof b !== "object" || !a || !b) return false;
+  const ka = Object.keys(a), kb = Object.keys(b);
+  return ka.length === kb.length && ka.every((k) =>
+    deepEqual((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]));
+}`,
+      follow:"What is the complexity of your flatten? O(n) in total elements, plus recursion depth.",
+      trap:"Skipping complexity analysis, or ignoring cycles and Dates in deepEqual without saying so.",
+      src:`Widely reported. For depth on patterns see the DSA track of this site.` },
+  ]
+}
+];
+
+const topic9Revise = [
+  ["Machine coding", "Clarify, sketch state, happy path, edge cases, accessibility, cleanup. Working beats pretty."],
+  ["Recurring builds", "Todo, autocomplete, infinite scroll, pagination, modal, tabs, toast, multi-step form."],
+  ["Autocomplete", "Debounce, abort stale requests, loading, empty and error states, keyboard, combobox ARIA."],
+  ["Design outline", "Requirements, architecture, data, interaction, quality, trade-offs."],
+  ["Testing", "Query by role, act like a user, mock the network, avoid implementation details."],
+  ["Git", "Resolve, add, continue, or abort. Never force-push shared history."]
+];
+
+const topic9Sources = `
+  <p>No page in this topic was opened while writing, and none was seen as a search excerpt. Machine-coding and system-design formats are widely reported patterns, not a standard: companies vary in length, allowed libraries and what they score. Ask the recruiter for the format.</p>
+  <p>The code samples are illustrative. They were not run against a real project, so treat them as a starting structure to rebuild yourself, not a copy-paste answer.</p>`;
+const guideHtml = `
+<div class="guide">
+  <h3>What to prepare first</h3>
+  <p>Frontend interviews in India usually rest on four pillars: JavaScript, React, TypeScript and browser fundamentals. The table is an editorial ranking of how often each area is reported to come up, not measured data. Use it to order your time, not to skip areas entirely.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Priority</th><th>Area</th><th>Where on this page</th></tr></thead>
+    <tbody>
+      <tr><td><span class="prio p0">P0</span></td><td>JavaScript fundamentals, closures, this, prototypes, arrays</td><td><a href="#javascript">JavaScript</a></td></tr>
+      <tr><td><span class="prio p0">P0</span></td><td>Async JavaScript and the event loop</td><td><a href="#async">Async and event loop</a></td></tr>
+      <tr><td><span class="prio p0">P0</span></td><td>React and hooks, rendering and re-rendering</td><td><a href="#react">React and hooks</a>, <a href="#rendering">Rendering</a></td></tr>
+      <tr><td><span class="prio p0">P0</span></td><td>React machine coding</td><td><a href="#machine">Machine coding</a></td></tr>
+      <tr><td><span class="prio p1">P1</span></td><td>TypeScript</td><td><a href="#typescript">TypeScript</a></td></tr>
+      <tr><td><span class="prio p1">P1</span></td><td>Browser, DOM, event propagation; HTML and CSS</td><td><a href="#web">Browser, HTML, CSS</a></td></tr>
+      <tr><td><span class="prio p1">P1</span></td><td>HTTP, APIs, authentication</td><td><a href="#network">HTTP, auth, security</a></td></tr>
+      <tr><td><span class="prio p1">P1</span></td><td>DSA for frontend</td><td>end of <a href="#machine">Machine coding</a>, and the DSA track</td></tr>
+      <tr><td><span class="prio p2">P2</span></td><td>Performance, state management, testing, frontend system design</td><td><a href="#rendering">Rendering</a>, <a href="#state">State</a>, <a href="#machine">Machine coding</a></td></tr>
+      <tr><td><span class="prio p3">P3</span></td><td>Build tools, advanced JavaScript, micro-frontends</td><td>parts of <a href="#machine">Machine coding</a> and <a href="#javascript">JavaScript</a></td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Pick your route</h3>
+  <div class="two">
+    <div class="level-card"><span class="lvl fresher">SDE-1</span>
+      <p>Go in this order: JavaScript, React, TypeScript, HTML and CSS, the browser, APIs, DSA, then machine coding. Depth on the first three matters more than breadth on the rest. Practise building small components from a blank file every few days.</p></div>
+    <div class="level-card"><span class="lvl mid">SDE-2 and above</span>
+      <p>Add depth on React rendering and internals, performance, architecture, state management, testing, frontend system design and security. Expect to justify trade-offs and describe something you shipped, with numbers where you have them.</p></div>
+  </div>
+
+  <h3>The 20 you must not get wrong</h3>
+  <p>If time is short, be able to explain and code around these. Each links to where it is covered.</p>
+  <ol>
+    <li>Closures <a href="#javascript">(JavaScript)</a></li>
+    <li>Scope and hoisting <a href="#javascript">(JavaScript)</a></li>
+    <li><code>this</code> <a href="#javascript">(JavaScript)</a></li>
+    <li>The event loop <a href="#async">(Async)</a></li>
+    <li>Promises <a href="#async">(Async)</a></li>
+    <li><code>async/await</code> <a href="#async">(Async)</a></li>
+    <li>Debounce and throttle <a href="#async">(Async)</a></li>
+    <li>The prototype chain <a href="#javascript">(JavaScript)</a></li>
+    <li>Array methods <a href="#javascript">(JavaScript)</a></li>
+    <li>React rendering <a href="#rendering">(Rendering)</a></li>
+    <li><code>useState</code> <a href="#react">(React and hooks)</a></li>
+    <li><code>useEffect</code> <a href="#react">(React and hooks)</a></li>
+    <li><code>useMemo</code> and <code>useCallback</code> <a href="#react">(React and hooks)</a></li>
+    <li><code>useRef</code> <a href="#react">(React and hooks)</a></li>
+    <li>React keys <a href="#react">(React and hooks)</a></li>
+    <li>State management <a href="#state">(State)</a></li>
+    <li>TypeScript generics <a href="#typescript">(TypeScript)</a></li>
+    <li>HTTP, APIs and authentication <a href="#network">(HTTP, auth, security)</a></li>
+    <li>DOM events <a href="#web">(Browser)</a></li>
+    <li>React machine-coding problems <a href="#machine">(Machine coding)</a></li>
+  </ol>
+
+  <h3>Questions to answer without touching a keyboard</h3>
+  <p>Say each one aloud in under two minutes, with one example. If you stall, that is your study list.</p>
+  <div class="two">
+    <div class="level-card"><strong>JavaScript</strong>
+      <ul><li>The event loop and closures</li><li>Prototypal inheritance and <code>this</code></li><li>call, apply and bind</li><li>map, forEach and reduce</li><li>Promise chaining and <code>Promise.all</code></li><li>Debounce versus throttle</li><li>Shallow versus deep copy</li></ul></div>
+    <div class="level-card"><strong>React</strong>
+      <ul><li>What causes a re-render</li><li>Reconciliation and keys</li><li>useEffect, and why it runs twice in development</li><li>useMemo versus useCallback</li><li>useRef versus useState</li><li>Context versus Redux</li><li>Controlled versus uncontrolled</li><li>How to optimise a React app</li></ul></div>
+    <div class="level-card"><strong>TypeScript</strong>
+      <ul><li>interface versus type</li><li>any versus unknown, never versus void</li><li>Union versus intersection</li><li>Generics, keyof, mapped types</li><li>Utility types</li><li>Typing props and API responses</li></ul></div>
+  </div>
+
+  <h3>How to answer well</h3>
+  <ol>
+    <li><strong>Definition first,</strong> in one sentence. Then how it works, then a small example.</li>
+    <li><strong>Name the trade-off.</strong> "It depends" is fine if you follow it with what it depends on.</li>
+    <li><strong>Think aloud while coding.</strong> State assumptions and edge cases before you write them.</li>
+    <li><strong>Say what you don't know,</strong> then how you would find out. Guessing confidently is worse.</li>
+    <li><strong>Have one project you can defend</strong> down to a bug you fixed and a decision you would change.</li>
+  </ol>
+
+  <section class="closing">
+    <h3>A word before you go</h3>
+    <p>You don't need to know everything on this page. You need to explain the core clearly, build a small component without freezing, and be honest about the edges of what you know.</p>
+    <p>Each interview shows you one gap. Close it, and the next goes better.</p>
+  </section>
+</div>`;
+
+const topic10Sources = `
+  <p>The priority table and both routes are an editorial judgement, based on the topic list supplied by this site's author and widely reported patterns in frontend interview write-ups. They are not derived from a measured dataset, and companies differ. The star ratings and P0 to P3 labels are a suggested ordering, not facts.</p>`;
+
+const topics = [
+  { num:1, id:"javascript", name:"JavaScript fundamentals", intro:"Types, scope and closures, this, prototypes, and the array methods interviewers ask you to rewrite.", parts:javascript, revise:topic1Revise, sources:topic1Sources },
+  { num:2, id:"async", name:"Async JavaScript and the event loop", intro:"The event loop, promises and async/await, and the debounce, throttle and delegation questions that follow.", parts:asyncjs, revise:topic2Revise, sources:topic2Sources },
+  { num:3, id:"react", name:"React fundamentals and hooks", intro:"Components, props and state, and the hooks interviewers probe hardest, especially useEffect.", parts:reactcore, revise:topic3Revise, sources:topic3Sources },
+  { num:4, id:"rendering", name:"Rendering and performance", intro:"What triggers a re-render, how reconciliation works, and how to make a slow React app fast.", parts:rendering, revise:topic4Revise, sources:topic4Sources },
+  { num:5, id:"state", name:"State, forms, and routing", intro:"Where state should live, Redux Toolkit versus server-state libraries, forms, and React Router.", parts:statemgmt, revise:topic5Revise, sources:topic5Sources },
+  { num:6, id:"typescript", name:"TypeScript", intro:"The type system from any versus unknown to generics and mapped types, and how to type React.", parts:typescript, revise:topic6Revise, sources:topic6Sources },
+  { num:7, id:"web", name:"Browser, HTML, and CSS", intro:"The rendering pipeline, DOM events and storage, accessibility, and CSS layout.", parts:webplatform, revise:topic7Revise, sources:topic7Sources },
+  { num:8, id:"network", name:"HTTP, auth, security, and performance", intro:"Methods and status codes, caching, tokens, XSS versus CSRF versus CORS, and Core Web Vitals.", parts:network, revise:topic8Revise, sources:topic8Sources },
+  { num:9, id:"machine", name:"Machine coding, system design, and tooling", intro:"How to run a build round, the components asked most, frontend system design, testing, and Git.", parts:machine, revise:topic9Revise, sources:topic9Sources },
+  { num:10, id:"guide", name:"Priorities and how to prepare", intro:"What to study first, a route for SDE-1 and SDE-2, and the 20 topics you must not get wrong.", custom:guideHtml, sources:topic10Sources }
+];
+
+const levelName = { fresher:"Fresher", mid:"Mid", senior:"Senior" };
+const chev = '<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>';
+const content = document.getElementById('content');
+
+function renderQuestion(item){
+  const d = document.createElement('details');
+  d.className = 'q';
+  d.dataset.level = item.level;
+  let tail = '';
+  if (item.follow) tail += `<p><span class="label">They'll ask next:</span> ${item.follow}</p>`;
+  if (item.trap) tail += `<div class="trap"><p><span class="label">Trap:</span> ${item.trap}</p></div>`;
+  let body;
+  if (item.predict) {
+    body = `<pre><code></code></pre><details class="reveal"><summary>Show the answer</summary>${item.a}${tail}</details><p class="src">${item.src}</p>`;
+  } else {
+    body = item.a + (item.code ? '<pre><code></code></pre>' : '') + tail + `<p class="src">${item.src}</p>`;
+  }
+  d.innerHTML = `<summary><span class="qtext">${item.q}</span><span class="qmeta"><span class="lvl ${item.level}">${levelName[item.level]}</span>${chev}</summary><div class="qbody">${body}</div>`;
+  if (item.code) {
+    const code = d.querySelector('pre code');
+    code.textContent = item.code;
+    if (item.lang) code.dataset.lang = item.lang;
+  }
+  return d;
+}
+
+topics.forEach(t => {
+  const top = document.createElement('section');
+  top.className = 'topic';
+  top.id = t.id;
+  top.innerHTML = `<p class="phase-title">Topic ${t.num}</p><h2 class="topic-title">${t.name}</h2><p class="topic-intro">${t.intro}</p>`;
+  if (t.custom) top.insertAdjacentHTML('beforeend', t.custom);
+  (t.parts || []).forEach(part => {
+    const sec = document.createElement('section');
+    sec.className = 'part';
+    sec.innerHTML = `<h3>${part.title}</h3><p>${part.intro}</p>`;
+    part.qs.forEach(item => sec.appendChild(renderQuestion(item)));
+    top.appendChild(sec);
+  });
+  if (t.revise) {
+    const rev = document.createElement('section');
+    rev.className = 'revise';
+    rev.innerHTML = `<h2>The night before</h2><p>If you remember nothing else from this topic, remember these.</p><dl>${t.revise.map(([k,v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>`;
+    top.appendChild(rev);
+  }
+  const src = document.createElement('details');
+  src.className = 'sources';
+  src.innerHTML = `<summary>Sources for this topic</summary>${t.sources}`;
+  top.appendChild(src);
+  content.appendChild(top);
+});
+
+document.getElementById('jump').innerHTML = topics.map(t => `<a href="#${t.id}">${t.name}</a>`).join('');
+
+// Level filter
+const chips = document.querySelectorAll('.chip');
+function applyFilter(level){
+  chips.forEach(c => c.setAttribute('aria-pressed', String(c.dataset.level === level)));
+  document.querySelectorAll('details.q').forEach(d => {
+    d.classList.toggle('hidden', level !== 'all' && d.dataset.level !== level);
+  });
+  document.querySelectorAll('.part').forEach(p => {
+    const visible = p.querySelectorAll('details.q:not(.hidden)').length;
+    p.classList.toggle('hidden', visible === 0);
+  });
+  try { localStorage.setItem('react:level:v1', level); } catch (e) {}
+}
+chips.forEach(c => c.addEventListener('click', () => applyFilter(c.dataset.level)));
+let saved = 'all';
+try { saved = localStorage.getItem('react:level:v1') || 'all'; } catch (e) {}
+applyFilter(saved);
+
+// Open / close all
+const toggle = document.getElementById('toggleAll');
+toggle.addEventListener('click', () => {
+  const all = document.querySelectorAll('details.q:not(.hidden)');
+  const open = toggle.dataset.open !== 'true';
+  all.forEach(d => d.open = open);
+  toggle.dataset.open = String(open);
+  toggle.textContent = open ? 'Close all answers' : 'Open all answers';
+});
+
+// Back to top
+const toTop = document.getElementById('toTop');
+const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+function updateToTop(){
+  const show = window.scrollY > 700;
+  toTop.classList.toggle('show', show);
+  toTop.tabIndex = show ? 0 : -1;
+}
+window.addEventListener('scroll', updateToTop, { passive: true });
+updateToTop();
+toTop.addEventListener('click', () => {
+  window.scrollTo({ top: 0, behavior: reduceMotion ? 'auto' : 'smooth' });
+  const first = document.querySelector('.hero h1');
+  if (first) { first.setAttribute('tabindex', '-1'); first.focus({ preventScroll: true }); }
+});
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>
+// Highlight every code block. The language is chosen here rather than auto-detected,
+// because auto-detection misreads short snippets. A card can set lang ("js", "ts",
+// "tsx", "css"); otherwise the snippet is treated as TypeScript, which also
+// covers plain JavaScript and JSX.
+(function(){
+  if (!window.hljs) return;
+  const map = { js:'javascript', ts:'typescript', tsx:'typescript', css:'css' };
+  function langFor(el){
+    if (el.dataset.lang) return map[el.dataset.lang] || null;
+    return 'typescript';
+  }
+  document.querySelectorAll('pre code').forEach(el => {
+    const lang = langFor(el);
+    if (!lang) return;
+    el.classList.add('language-' + lang);
+    try { hljs.highlightElement(el); } catch (e) {}
+  });
+})();
+</script>
+</body>
+</html>
