@@ -1917,7 +1917,368 @@ shows that. An average at 500 req/s would read about 140ms and look fine.`} ],
     ],
     sources:`<p>Verified while writing, in this container: the per-test rollback harness was run against the live PostgreSQL 16.15 with the <code>pg</code> client on Node 22, and the output in the snippet (zero rows before, two passing tests, zero rows after) is real. The flaky date test was run across seven dates, and the six failures shown are its actual output: <code>setMonth</code> on 29, 30 or 31 January rolls past the end of February, so the test passes on the 15th and fails at month end.</p>
       <p>The load-test table is illustrative and is labelled as a shape to aim for, not a measurement: it describes what a percentile curve looks like when a service degrades before it errors.</p>
-      <p>References, not retrieved while writing: the Testcontainers and Pact sites.</p>` }
+      <p>References, not retrieved while writing: the Testcontainers and Pact sites.</p>` },
+
+{ num:7, id:"security", phase:3, name:"Auth, authorization and security",
+    intro:"Who is calling, what they may do, and how not to trust anything they send.",
+    topics:[
+
+      { id:"sessions-vs-tokens", name:"Sessions versus tokens, and cookie flags",
+        depth:"build", core:true,
+        line:"For a first-party web app, a server session in a cookie is still the better default.",
+        what:`<p>Once someone has proved who they are, every later request has to carry that fact. Two mechanisms: a session identifier that means nothing on its own and is looked up server-side, or a signed token that carries the claims itself and needs no lookup.</p>
+              <p>Tokens became the default through association with single-page applications, but for a first-party web application the server session is usually the better engineering choice, because it can be revoked instantly.</p>`,
+        use:`<p>A user reports their account is compromised and support clicks "sign out everywhere". With server sessions that is one delete and it takes effect on the next request. With stateless tokens it takes effect whenever the tokens expire, unless you have built a revocation list, at which point you have a server-side session with extra steps.</p>`,
+        concepts:[
+          ["Server session","An opaque random id in a cookie, with the state in your store. Revocable immediately, costs a lookup per request, and the id reveals nothing if stolen from a log."],
+          ["Stateless token","Claims signed by the server. No lookup, scales across services, and cannot be withdrawn before it expires."],
+          ["HttpOnly","JavaScript cannot read the cookie. This is what makes a cookie safer than <code>localStorage</code> against cross-site scripting, and it is not optional."],
+          ["Secure and __Host-","<code>Secure</code> means HTTPS only. The <code>__Host-</code> name prefix additionally forces a host-scoped cookie with no <code>Domain</code>, which stops a subdomain setting one for you."],
+          ["SameSite","<code>Lax</code> stops the cookie being sent on cross-site POSTs, which removes most CSRF. <code>Strict</code> also breaks inbound links from other sites; <code>None</code> requires <code>Secure</code> and brings CSRF back."]
+        ],
+        how:`<p>For a first-party web app, use a server session in a cookie with all four flags set, and rotate the session id on login to prevent session fixation. For a public API or multiple services, use tokens and accept that you need an answer to revocation before launch, not after.</p>
+              <p>CSRF is the attack that applies to cookies, because the browser attaches them automatically to cross-site requests. <code>SameSite=Lax</code> removes most of it; add a per-session CSRF token for state-changing requests if you support older browsers or need <code>SameSite=None</code>.</p>`,
+        code:[ {label:"The cookie, with nothing left to chance", lang:"text", code:`Set-Cookie: __Host-session=9f3c1a...;
+            HttpOnly;          JavaScript cannot read it
+            Secure;            HTTPS only
+            SameSite=Lax;      not sent on cross-site POSTs
+            Path=/;            required by the __Host- prefix
+            Max-Age=1209600    an explicit lifetime, not "session"
+
+__Host- also forbids a Domain attribute, so the cookie is locked to
+exactly this host. Without that, any subdomain, including one you do
+not control, can set a cookie your application will read.
+
+On login: destroy the old session and issue a new id. Reusing the id
+across the privilege change is session fixation.`} ],
+        tradeoff:`<p>Sessions cost a store lookup per request and give you instant revocation, a server-side record of who is signed in, and the ability to change what a session means without reissuing anything. Tokens cost nothing per request and give that up. The lookup is a cache hit measured in a fraction of a millisecond, so the performance argument for tokens is usually smaller than people assume; the real argument is architectural, when several services must validate independently without sharing a session store.</p>`,
+        pitfall:"Storing a token in localStorage so the single-page app can read it. Any cross-site scripting bug then reads it too and exfiltrates it, which an HttpOnly cookie makes impossible. Convenience for your JavaScript is convenience for the attacker's.",
+        exercise:`<p>Open your application and inspect its session cookie. Check all four attributes. Then try to read it from the console: if you can, so can injected script. Finally, log in and compare the session id before and after: if it is unchanged, you have a session fixation bug.</p>`,
+        refs:[ ["RFC 6265bis: cookies, including __Host-","https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-rfc6265bis"], ["OWASP: session management cheat sheet","https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html"] ] },
+
+      { id:"passwords", name:"Passwords and credential handling",
+        depth:"build", core:true,
+        line:"A slow hash with per-user salt, and a reset flow that does not announce who has an account.",
+        what:`<p>You will be breached one day, or a backup will leak, and the only question is what the attacker gets. A password stored in plain text or under a fast hash is a list of credentials that also unlocks your users' other accounts. A password under a slow, salted, memory-hard hash is a pile of expensive guesses.</p>
+              <p>The surrounding flows matter as much as the hash: registration, login and reset all leak information if written carelessly.</p>`,
+        use:`<p>An attacker dumps your users table. With SHA-256 and no salt, a commodity GPU tries billions of candidates a second and the common passwords fall in minutes, and identical hashes reveal which users share a password. With Argon2id at sensible parameters, each guess costs memory and milliseconds, and every row has to be attacked separately.</p>`,
+        concepts:[
+          ["Slow by design","A password hash should be deliberately expensive. Argon2id is the current first choice; bcrypt remains acceptable and widely available. A general-purpose hash such as SHA-256 is not a password hash."],
+          ["Salt","A unique random value per password, stored alongside it. Defeats precomputed tables and hides the fact that two users chose the same password. Your library does this for you."],
+          ["Parameters","Argon2id takes memory, iterations and parallelism; bcrypt takes a cost factor. Tune so a hash takes a few hundred milliseconds on your hardware, and raise it as hardware improves."],
+          ["Enumeration","Any difference between &quot;no such account&quot; and &quot;wrong password&quot;, in the body, the status code or the response time, tells an attacker which addresses are registered."],
+          ["Reset tokens","High-entropy, single-use, short-lived, stored hashed, and invalidating every session on use. A reset link is a credential."]
+        ],
+        how:`<p>Use the library, never the primitives. Encode the algorithm and parameters in the stored string so you can upgrade later, and rehash on successful login when the stored parameters are below current policy. Check new passwords against a list of known-breached ones, which stops far more account takeovers than any composition rule about punctuation.</p>
+              <p>Then write the three flows carefully: registration and login must give identical responses whether or not the account exists, and so must password reset, which should say "if that address has an account, we have sent a link" in every case.</p>`,
+        code:[ {label:"Storage and upgrade, in outline", code:`# Registration
+hash = argon2id.hash(password)      # salt and parameters generated,
+store(user.password_hash = hash)    # and encoded into the string:
+                                    # $argon2id$v=19$m=65536,t=3,p=4$<salt>$<hash>
+
+# Login, with a transparent upgrade path
+record = users.find_by_email(email)
+if record is None:
+    argon2id.verify(DUMMY_HASH, password)   # spend the same time anyway
+    return generic_failure()                # identical response
+if not argon2id.verify(record.password_hash, password):
+    return generic_failure()
+if argon2id.needs_rehash(record.password_hash):      # policy raised
+    record.password_hash = argon2id.hash(password)   # upgrade silently
+rotate_session_id()
+return success()`} ],
+        tradeoff:`<p>Higher parameters are better against an offline attacker and worse against an online one: a 500ms hash is 500ms of your CPU per login attempt, and a flood of logins becomes a denial of service you built yourself. Tune to a few hundred milliseconds, rate limit the login endpoint, and remember the two defences are complementary. The bigger decision is whether to handle passwords at all: delegating to an identity provider removes this entire topic from your codebase, at the cost of a dependency and less control over the sign-in experience.</p>`,
+        pitfall:"Returning a different message or status for an unknown email than for a wrong password. It turns your login form into a tool for checking which of a leaked address list has accounts with you, which is the first step of a credential-stuffing campaign.",
+        exercise:`<p>Time your login endpoint for an existing user with a wrong password and for an address that does not exist. If the second is noticeably faster, you have a timing oracle; fix it by verifying against a dummy hash on the missing-user path. Then check whether your reset tokens are stored hashed and whether using one invalidates existing sessions.</p>`,
+        refs:[ ["OWASP: password storage cheat sheet","https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html"], ["RFC 9106: Argon2","https://www.rfc-editor.org/rfc/rfc9106.html"] ] },
+
+      { id:"jwt", name:"Tokens in practice: JWT validation, expiry and revocation",
+        depth:"build", core:true,
+        line:"The live danger is not alg:none; it is accepting a perfectly valid token meant for someone else.",
+        what:`<p>A JWT is a signed set of claims. Verifying one properly means checking the signature, the algorithm, the issuer, the audience and the expiry. Miss any of the last three and you will accept a genuine, correctly signed, unexpired token that was never meant for your service.</p>
+              <p>The widely repeated warnings are mostly about <code>alg:none</code> and algorithm confusion. Those are real history, and current libraries defend against them. What current libraries do <em>not</em> do for you is check who the token was for.</p>`,
+        use:`<p>Your identity provider issues tokens for several services. A user with a legitimate token for the reports API sends it to the orders API. It is correctly signed by the right issuer and has not expired, so if the orders API does not check the audience, it is accepted, and that user now has access they were never granted.</p>`,
+        concepts:[
+          ["decode is not verify","Nearly every library has a decode function that parses the token without checking anything. It will happily return the claims of a token with a garbage signature."],
+          ["Pin the algorithm","Tell the library which algorithms are acceptable. Modern libraries also infer this from the key type, but pinning is one line and removes a whole class of attack."],
+          ["Audience and issuer","<code>aud</code> is who the token is for, <code>iss</code> is who minted it. Neither is checked unless you ask, and this is the gap that bites in practice."],
+          ["Expiry and clock skew","<code>exp</code> is enforced by default by good libraries. Allow a small tolerance, measured in seconds, for clock differences between machines."],
+          ["Revocation","A stateless token cannot be withdrawn. The three real answers are short lifetimes, a denylist of revoked identifiers, or reference tokens checked against the issuer."]
+        ],
+        how:`<p>Call verify, never decode, and pass every option: algorithms, issuer, audience. Keep access tokens short, measured in minutes, and pair them with a refresh token that is long-lived, stored server-side, rotated on every use, and revoked for the whole family if an already-used one is presented again, since that means one was stolen.</p>
+              <p>The results below are from running each case rather than from reputation, on <code>jsonwebtoken</code> 9.0.3 under Node 22. Other libraries and languages differ, which is itself the reason to pin options explicitly rather than trust a default.</p>`,
+        code:[ {label:"Node: what is caught, and what is not", lang:"js", code:`// 1. decode() checks nothing at all. The signature here is garbage.
+jwt.decode(tamperedToken);
+// ACCEPTED -> {"sub":"42","role":"user","aud":"orders-api", ...}
+
+// 2. alg:none, signature stripped. Rejected either way by this library.
+jwt.verify(noneToken, KEY);                        // rejected: signature required
+jwt.verify(noneToken, KEY, { algorithms:['HS256'] });  // rejected
+
+// 3. Algorithm confusion: forge HS256 using the RSA PUBLIC key as the
+//    HMAC secret. Rejected, because the library infers from key type.
+jwt.verify(forged, publicKey);                     // rejected: invalid algorithm
+
+// 4. THE ONE THAT GETS THROUGH. A real token, correctly signed by the
+//    right issuer, not expired, but minted for a different service.
+jwt.verify(otherAudienceToken, KEY, { algorithms:['HS256'] });
+// ACCEPTED -> "42"
+
+jwt.verify(otherAudienceToken, KEY, { algorithms:['HS256'],
+  audience: 'orders-api', issuer: 'https://auth.example.com' });
+// rejected: jwt audience invalid. expected: orders-api`} ],
+        tradeoff:`<p>Short-lived access tokens make revocation a non-problem and make the refresh endpoint busy. Long-lived tokens are cheap and leave you with no way to end a session. A denylist of revoked token identifiers restores revocation and reintroduces the per-request lookup that stateless tokens existed to avoid, which is worth saying plainly: at that point, compare it honestly against a server session, which does the same job with less machinery. Keep tokens where several services must validate independently; use sessions where one application owns the user.</p>`,
+        pitfall:"Putting authorization decisions in the token and never re-checking them. A role baked into a token issued an hour ago is an hour-old opinion, so a revoked administrator stays an administrator until it expires.",
+        exercise:`<p>Take your token verification code and check whether it passes audience and issuer. Then mint a token with the right signature and a different audience and send it to your API. If it is accepted, you have just reproduced case 4 above against your own service.</p>`,
+        refs:[ ["RFC 7519: JSON Web Token","https://www.rfc-editor.org/rfc/rfc7519.html"], ["RFC 8725: JWT best current practices","https://www.rfc-editor.org/rfc/rfc8725.html"] ] },
+
+      { id:"oauth-oidc", name:"OAuth 2.1 and OpenID Connect",
+        depth:"understand", core:false,
+        line:"Delegated access for third parties, and identity layered on top. Not a login system for your own app by default.",
+        what:`<p>OAuth exists so a user can let one application use another on their behalf without handing over their password. It is an <em>authorization</em> framework: the token says what the holder may do, not who they are. OpenID Connect adds the identity layer on top, with an ID token that does say who the user is.</p>
+              <p>OAuth 2.1 consolidates OAuth 2.0 with the security practices that have accumulated since, and removes the flows that turned out to be unsafe.</p>`,
+        use:`<p>Your application needs to read a customer's invoices from their accounting software. Asking for their accounting password is unacceptable and unnecessary. The authorization code flow sends them to their provider, they approve a named, limited scope, and you receive a token that reads invoices and nothing else, which they can revoke without changing any password.</p>`,
+        concepts:[
+          ["Four parties","The resource owner (the user), the client (your app), the authorization server (issues tokens), and the resource server (holds the data)."],
+          ["Authorization code flow","The user authenticates at the authorization server, which redirects back with a short-lived code; your server exchanges that code for a token. The code crosses the browser, the token does not."],
+          ["PKCE","The client sends a hash of a secret it keeps, then proves it holds the secret when exchanging the code. Stops an attacker who intercepts the code from using it."],
+          ["Scopes","What the token permits. Request the narrowest set that does the job: a token that can do everything is a password with a shorter lifetime."],
+          ["OIDC on top","Adds an ID token, a <code>userinfo</code> endpoint and a discovery document. If you want to know who the user is, you want OIDC, not bare OAuth."]
+        ],
+        how:`<p>Use the authorization code flow with PKCE and a library. Do not implement the protocol by hand: the failure modes are subtle and the consequences are account takeover. Register the exact redirect URI, validate <code>state</code> on the way back, and keep the client secret on a server if you have one.</p>
+              <p>The current OAuth 2.1 draft is specific about what changed from OAuth 2.0, and the normative wording is worth quoting because it is narrower than the common summary.</p>`,
+        code:[ {label:"What OAuth 2.1 actually says", lang:"text", code:`PKCE
+  "Clients MUST use code_challenge and code_verifier and authorization
+   servers MUST enforce their use except under the conditions described
+   in Section 7.5.1."
+  "An AS MUST reject requests without a code_challenge from public
+   clients, and MUST reject such requests from other clients unless
+   there is reasonable assurance that the client mitigates
+   authorization code injection in other ways."
+
+Implicit grant
+  "The Implicit grant (response_type=token) is omitted from this
+   specification as per Section 2.1.2 of [RFC9700]"
+
+Password grant
+  "The Resource Owner Password Credentials grant is omitted from this
+   specification as per Section 2.4 of [RFC9700]"
+
+Redirect URIs
+  "Authorization servers MUST reject authorization requests that
+   specify a redirect URI that doesn't exactly match one that was
+   registered" (loopback ports excepted)
+
+Tokens in URLs
+  "clients MUST NOT send the access token in a URI query parameter,
+   and resource servers MUST ignore access tokens in a URI query
+   parameter."
+
+Quoted from draft-ietf-oauth-v2-1-13. OAuth 2.1 is an Internet-Draft,
+not yet an RFC, so check the current revision before citing it.`} ],
+        tradeoff:`<p>Delegating sign-in to an identity provider removes password storage, reset flows and multi-factor from your codebase, and hands your users' access to a third party whose outage is your outage and whose account recovery policy becomes yours. For a consumer product, offering it alongside your own accounts is usually right. For an internal tool, an existing corporate provider is almost always right. What is rarely right is building OAuth yourself to log users into your own first-party application: a session cookie does that job with a fraction of the moving parts.</p>`,
+        pitfall:"Using an ID token as an access token, or an access token as proof of identity. The ID token is for your client and says who signed in; the access token is for the resource server and says what may be done. Swapping them is a standard finding in security reviews.",
+        exercise:`<p>Read your provider's discovery document at <code>/.well-known/openid-configuration</code> and identify the authorization endpoint, the token endpoint and the supported scopes. Then trace one real login in browser dev tools and find the <code>code_challenge</code> on the way out and the <code>state</code> on the way back. If either is missing, that is the finding.</p>`,
+        refs:[ ["The OAuth 2.1 Authorization Framework (draft-13)","https://datatracker.ietf.org/doc/html/draft-ietf-oauth-v2-1-13"], ["OpenID Connect Core","https://openid.net/specs/openid-connect-core-1_0.html"] ] },
+
+      { id:"authz-models", name:"Authorization models: roles, attributes, ownership and tenancy",
+        depth:"build", core:true,
+        line:"Authentication is one check at the edge; authorization is a check on every object you return.",
+        what:`<p>Authentication happens once and is easy to get right because a framework does it. Authorization happens on every request, against every object, and is usually hand-written, which is why the most common serious vulnerability in real APIs is not a missing login but a missing ownership check.</p>
+              <p>Knowing who the caller is tells you nothing about whether this particular row is theirs.</p>`,
+        use:`<p><code>GET /orders/8841</code> checks that the caller is signed in, loads order 8841, and returns it. Every authenticated user can now read every order by changing the number. The endpoint has authentication and no authorization, it passes every test that uses the owner's own id, and it is the single most common critical finding in API security reviews.</p>`,
+        concepts:[
+          ["Role-based","Permissions attached to named roles. Simple, legible, and it grows awkward when the rule depends on the object rather than the person."],
+          ["Attribute-based","A rule evaluated over attributes of the user, the object and the context. Expressive, and harder to audit because the answer is computed."],
+          ["Object-level","Does this user have a relationship to <em>this</em> row? Not expressible as a role, and the check people forget."],
+          ["Tenant isolation","In a multi-tenant system, the tenant must constrain every query, not just the ones you remembered. One missing filter leaks another customer's data."],
+          ["Deny by default","Authorization should be something an endpoint opts into. If forgetting to add a check results in an open endpoint, some endpoint will be open."]
+        ],
+        how:`<p>Push tenancy down to where queries are built, so it cannot be omitted. A repository that takes the tenant from the request context and adds it to every query makes the safe path the only path; the alternative, remembering a <code>WHERE tenant_id = ?</code> in every query, fails the first time someone is in a hurry. In Postgres, row-level security can enforce the same rule in the database, below any code path at all.</p>
+              <p>Then make authorization mandatory at the framework level: deny by default, and require each route to declare its rule, so a new endpoint with no declaration fails rather than opens.</p>`,
+        code:[ {label:"Making the safe path the only path", code:`# Wrong: authentication without authorization.
+get("/orders/{id}"):
+    require_authenticated()
+    return orders.find(id)             # whose order? nobody asked
+
+# Better: the ownership check is explicit, and 404 rather than 403 so
+# the response does not confirm that someone else's order exists.
+get("/orders/{id}"):
+    order = orders.find(id)
+    if order is None or order.customer_id != current_user.id:
+        return 404
+    return order
+
+# Best: the scope is structural. The repository is constructed with the
+# tenant, so a query that forgets it cannot be written.
+class ScopedOrders:
+    def __init__(self, tenant_id): self.tenant = tenant_id
+    def find(self, id):
+        return query("select * from orders where id = ? and tenant_id = ?",
+                     id, self.tenant)
+
+# And in the database itself, below every code path:
+#   alter table orders enable row level security;
+#   create policy tenant_isolation on orders
+#     using (tenant_id = current_setting('app.tenant_id')::bigint);`} ],
+        tradeoff:`<p>Roles are easy to reason about and to show in an admin screen, and they stop fitting the moment a rule mentions the object: "a manager can approve expenses, but not their own". Attribute rules handle that and are harder to review, because answering "who can see this?" means running the engine rather than reading a table. A workable middle: roles for coarse capability, an explicit ownership or relationship check at the object level, and a policy engine only when the rules genuinely need one. Adding a policy engine before the rules are complicated is complexity with no payoff.</p>`,
+        pitfall:"Checking authorization in the user interface. Hiding a button is a usability decision, not a security control, and the endpoint behind it is still reachable with curl by anyone who guesses the path.",
+        exercise:`<p>Take every endpoint that accepts an id and, as user A, request an object belonging to user B. Record what comes back. Every 200 is a vulnerability. Then add tenancy to the repository layer rather than to each handler, and confirm the same requests now return 404 without any handler having changed.</p>`,
+        refs:[ ["OWASP API Security Top 10: broken object level authorization","https://owasp.org/API-Security/editions/2023/en/0xa1-broken-object-level-authorization/"], ["PostgreSQL: row security policies","https://www.postgresql.org/docs/current/ddl-rowsecurity.html"] ] },
+
+      { id:"service-auth", name:"Service-to-service authentication",
+        depth:"understand", core:false,
+        line:"Inside the network is not an identity, and a shared static key is not much better.",
+        what:`<p>When your services call each other, each call needs an identity too. The traditional answer was that the network provided it: if the request arrived on the internal interface, it was trusted. That assumption fails the moment anything inside the network is compromised, which is the normal shape of a serious breach.</p>`,
+        use:`<p>An internal reporting tool is compromised through a dependency. Because every service trusts anything originating inside the cluster, that foothold can call the payments service directly. With per-service identities and scopes, the reporting tool's credential can read and cannot charge, and the blast radius stops there.</p>`,
+        concepts:[
+          ["Mutual TLS","Both sides present certificates, so the transport itself carries identity. Strong, and it needs certificate issuance and rotation, which a service mesh usually provides."],
+          ["Client credentials","A service authenticates to the authorization server with its own credential and gets a short-lived token with scopes. Reuses the OAuth machinery you may already run."],
+          ["Workload identity","The platform attests which workload is calling, and short-lived credentials are issued against that. No long-lived secret to leak."],
+          ["Least privilege per service","Each service gets only the scopes it needs. The whole value is that a compromised service cannot do everything."],
+          ["Propagating the user","Separate from the service's own identity: the downstream service often needs to know which end user this is for, carried as a signed token rather than a plain header."]
+        ],
+        how:`<p>Give every service its own identity and its own narrow scopes, and make credentials short-lived so a leaked one expires. If you run a service mesh, mutual TLS is close to free and is the obvious choice. If not, client-credentials tokens from your existing authorization server are the lower-friction path.</p>
+              <p>Keep the two identities distinct: the calling service, and the end user on whose behalf it is calling. Collapsing them means a downstream service cannot apply user-level authorization, and tends to end with services running as an omnipotent principal.</p>`,
+        tradeoff:`<p>Mutual TLS is the strongest option and the heaviest: certificates to issue, rotate and debug, and a failure mode that is opaque when a clock is wrong or a chain is incomplete. A mesh makes it manageable and is itself a substantial operational commitment. Tokens are easier to adopt, easier to log, and depend on the authorization server being available on the call path. For a handful of services, tokens from a provider you already run are usually the right starting point; adopt a mesh when the number of services makes certificate management worth automating.</p>`,
+        pitfall:"One shared API key used by every service. It cannot be rotated without coordinating every deployment, it appears in half a dozen configuration stores, and when it leaks you cannot tell which service leaked it or what used it.",
+        exercise:`<p>List your internal calls and, for each, write down what would stop an attacker with a foothold in one service from making it. If the answer is "nothing, it is internal", pick the most sensitive one and put a scoped credential in front of it. Then check what happens to the end user's identity across that call.</p>`,
+        refs:[ ["RFC 8705: mutual TLS client authentication","https://www.rfc-editor.org/rfc/rfc8705.html"] ] },
+
+      { id:"untrusted-input", name:"Untrusted input: injection, SSRF, traversal and deserialization",
+        depth:"build", core:true,
+        line:"Every one of these is the same bug: data from outside being treated as instructions.",
+        what:`<p>Injection, path traversal, server-side request forgery and unsafe deserialization look like four separate vulnerabilities. They are one mistake in four places: a value supplied by a caller is concatenated into something that gets interpreted — a query, a path, a URL, an object graph — and the interpreter cannot tell the data from the instruction.</p>
+              <p>The fix is the same shape every time: never build the instruction by concatenation. Pass the data separately, or validate it against an allowlist.</p>`,
+        use:`<p>An image-import feature takes a URL and fetches it. An attacker supplies the cloud metadata address, your server fetches it because it is inside the network, and the response contains credentials for the instance role. No database was involved and no code was injected, and it is the same mistake: a caller's value was used to construct an instruction.</p>`,
+        concepts:[
+          ["SQL injection","Fixed completely by parameterized queries. The parameter is sent separately from the statement, so it can never be parsed as SQL, whatever it contains."],
+          ["Dynamic identifiers","Table and column names cannot be parameters. If a caller chooses a sort column, map their value through an allowlist; never interpolate it."],
+          ["SSRF","Your server fetches a URL the caller chose. Dangerous because your server sits inside the network, where metadata endpoints and internal services have no authentication."],
+          ["Path traversal","A filename from a caller, joined to a directory. <code>../</code> escapes it. Resolve the final path and confirm it is still inside the directory you intended."],
+          ["Deserialization","Formats that can reconstruct arbitrary objects can be made to execute code during construction. Use a data-only format such as JSON for anything from outside."]
+        ],
+        how:`<p>Parameterize every query, with no exceptions and no clever string builder. For the cases where a value must shape the statement, such as a sort column, keep an explicit map from caller input to real identifiers and reject anything not in it.</p>
+              <p>For SSRF, an allowlist of destinations is the only robust defence. Blocklists fail against redirects, DNS names that resolve to private addresses, and encodings; and the check must be re-applied after each redirect, because the first URL being safe says nothing about where it leads.</p>`,
+        code:[ {label:"The same mistake, four times, with the fix", code:`# SQL injection
+"select * from users where email = '" + email + "'"        # wrong
+query("select * from users where email = $1", email)       # right
+
+# Dynamic identifier: cannot be a parameter, so use an allowlist
+SORTABLE = {"date": "created_at", "total": "total_cents"}
+column = SORTABLE.get(params.sort)                         # None if unknown
+if column is None: reject(400)
+query(f"select * from orders order by {column} desc")      # safe: ours
+
+# Path traversal
+open(base + "/" + filename)                                # wrong
+path = realpath(join(base, filename))                      # right
+if not path.startswith(realpath(base) + "/"): reject(400)
+
+# SSRF: allowlist the destination, and re-check after every redirect
+host = parse(url).host
+if host not in ALLOWED_HOSTS: reject(400)
+fetch(url, follow_redirects=False)      # then validate each hop yourself
+
+# Deserialization: JSON in, always. Never a format that builds objects
+# from untrusted bytes.`} ],
+        tradeoff:`<p>An allowlist is restrictive and will block something legitimate one day, which is a support ticket. A blocklist never blocks anything legitimate and never blocks everything dangerous, because the attacker picks the input and you are guessing in advance. For anything where being wrong means a breach, take the support ticket. The one place blocklists earn their keep is as a second layer behind an allowlist, catching what should already have been impossible.</p>`,
+        pitfall:"Escaping input instead of parameterizing it. Escaping depends on getting every context and encoding right, in a function someone will later reuse in a different context. A parameter is not escaped, it is kept separate from the statement entirely, which is why it cannot be got wrong.",
+        exercise:`<p>Search your codebase for string concatenation near the words select, insert, update or delete, and for any file path built from a request value. Fix what you find. Then check whether anything in your service fetches a URL supplied by a caller, and if so, whether it would fetch <code>http://169.254.169.254/</code>.</p>`,
+        refs:[ ["OWASP Top 10","https://owasp.org/www-project-top-ten/"], ["OWASP: SSRF prevention cheat sheet","https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html"] ] },
+
+      { id:"cors-headers", name:"CORS, security headers and browser-facing concerns",
+        depth:"build", core:false,
+        line:"CORS is a browser rule about reading responses, and it is not an authorization control.",
+        what:`<p>The same-origin policy stops a page on one origin from reading a response from another. CORS is how a server opts out of that, for specific origins. It is widely misunderstood in both directions: people think it protects their API, and people disable it to make an error go away.</p>
+              <p>It does neither. CORS is enforced by browsers only; curl, a mobile app and any server ignore it entirely. Your authorization is what protects your API.</p>`,
+        use:`<p>A frontend on <code>app.example.com</code> calls an API on <code>api.example.com</code> and gets a CORS error. The quickest fix found online is <code>Access-Control-Allow-Origin: *</code>, which then fails anyway because the request sends cookies, and browsers refuse the wildcard with credentials. The correct fix is to echo the specific allowed origin and set <code>Access-Control-Allow-Credentials</code>.</p>`,
+        concepts:[
+          ["What CORS protects","The user, from a malicious page reading responses from sites they are logged into. Not your server, which receives the request regardless."],
+          ["Preflight","For anything beyond a simple request, the browser sends <code>OPTIONS</code> first and reads the allowed origin, methods and headers. Your API must answer it."],
+          ["Wildcard and credentials","<code>Access-Control-Allow-Origin: *</code> cannot be combined with credentials. Echo the specific origin from an allowlist instead, never reflect whatever was sent."],
+          ["Content-Security-Policy","Controls what the browser will load and execute on your pages. The strongest single defence against cross-site scripting."],
+          ["HSTS","<code>Strict-Transport-Security</code> tells the browser to use HTTPS for this host from now on, which closes the first-request downgrade window."]
+        ],
+        how:`<p>Keep an allowlist of origins and echo the matching one, with <code>Vary: Origin</code> so a cache does not serve one origin's response to another. Handle <code>OPTIONS</code> explicitly and give it a sensible <code>Max-Age</code> so the browser stops asking.</p>
+              <p>Then set the headers that actually defend the browser, which matter more than CORS and are usually missing.</p>`,
+        code:[ {label:"Headers worth setting on every response", lang:"text", code:`Strict-Transport-Security: max-age=31536000; includeSubDomains
+  Use HTTPS for this host for a year. Add preload only when certain.
+
+Content-Security-Policy: default-src 'self'; object-src 'none';
+                         frame-ancestors 'none'; base-uri 'self'
+  The strongest anti-XSS control. Start in Report-Only, read the
+  reports, then enforce. 'unsafe-inline' gives most of it back.
+
+X-Content-Type-Options: nosniff
+  Stop the browser second-guessing your Content-Type, which is how an
+  uploaded "image" becomes executable script.
+
+Referrer-Policy: strict-origin-when-cross-origin
+  Stop full URLs, including ids and tokens in paths, leaking outbound.
+
+And for CORS, from an allowlist rather than a reflection:
+Access-Control-Allow-Origin: https://app.example.com
+Access-Control-Allow-Credentials: true
+Vary: Origin`} ],
+        tradeoff:`<p>A strict Content-Security-Policy is the most effective browser-side control available and the most disruptive to adopt, because real applications have inline scripts, inline styles and third-party widgets that it breaks. The path that works is report-only first, for long enough to see real traffic, then enforcement. Adopting it in one step on a mature application usually ends with <code>unsafe-inline</code> added to stop the complaints, which removes most of the benefit while keeping the appearance of it.</p>`,
+        pitfall:"Reflecting the Origin header back as Access-Control-Allow-Origin to make CORS work everywhere. It allows every origin, including an attacker's page, and combined with credentials it lets that page read authenticated responses on behalf of your logged-in users.",
+        exercise:`<p>Request one of your endpoints and list the response headers. Compare against the four above. Then send an <code>Origin</code> header of <code>https://evil.example</code> and see what comes back: if it is echoed, you have the reflection bug. Finally add a <code>Content-Security-Policy-Report-Only</code> header and read a day of reports.</p>`,
+        refs:[ ["MDN: Cross-Origin Resource Sharing","https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CORS"], ["MDN: Content Security Policy","https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CSP"] ] },
+
+      { id:"data-protection", name:"Data protection: encryption, key rotation, PII and logs",
+        depth:"build", core:false,
+        line:"Encryption at rest defends against a stolen disk, and against very little else.",
+        what:`<p>Encryption is narrower than it sounds. Transport encryption protects data crossing a network. Encryption at rest protects a stolen disk or a discarded backup. Neither protects against an attacker who has your application credentials, because to that attacker the data is simply readable.</p>
+              <p>What reduces the damage of a breach is holding less data, for less time, and keeping the sensitive parts out of the places that copy data everywhere, which is mostly your logs.</p>`,
+        use:`<p>A debugging change logs the full request body on the authentication endpoint, to investigate a client problem. It ships. For three weeks, every password typed by every user is in plain text in the log aggregator, replicated to backups, and readable by everyone with log access. The database was encrypted the whole time and it made no difference at all.</p>`,
+        concepts:[
+          ["In transit","TLS between every pair of components, including inside your network. Covered in the networking stage."],
+          ["At rest","Disk or database encryption, usually a platform checkbox. Protects stolen hardware and old backups; invisible to anyone using the application."],
+          ["Application-level encryption","Encrypting specific fields before they reach the database, so a database compromise alone does not reveal them. Costs you the ability to query or index those fields."],
+          ["Envelope encryption and rotation","Data is encrypted with a data key, and the data key with a master key. Rotating the master then means re-encrypting keys, not re-encrypting all the data."],
+          ["Minimisation","The cheapest protection. Data you never collected cannot leak, and data deleted on a schedule stops being a liability."]
+        ],
+        how:`<p>Turn on transport and at-rest encryption, because they are nearly free, and then spend the real effort on the two things that change outcomes: collect less, and keep secrets out of the places that fan data out. Classify the fields that are genuinely sensitive, and apply field-level encryption only to those, accepting that you can no longer search them.</p>
+              <p>Then put a redaction layer in the logger itself, by field name, so a secret cannot be logged even by a developer who does not know the rule. A convention that people must remember will be forgotten during an incident, which is exactly when the most logging gets added.</p>`,
+        code:[ {label:"Redaction in the logger, not in the discipline", code:`REDACT = {"password", "token", "authorization", "cookie", "card_number",
+          "cvv", "secret", "api_key", "refresh_token", "id_token"}
+
+def scrub(value, key=None):
+    if key and key.lower() in REDACT:      return "[redacted]"
+    if isinstance(value, dict):            return {k: scrub(v, k)
+                                                   for k, v in value.items()}
+    if isinstance(value, list):            return [scrub(v) for v in value]
+    return value
+
+log.info("request", fields=scrub(request_body))
+
+# Never log, under any circumstances:
+#   credentials, tokens, cookies, Authorization headers,
+#   full card numbers, full request bodies on auth endpoints
+#
+# Then verify it: assert in a test that posting a password to the login
+# endpoint produces no log line containing that password.`} ],
+        tradeoff:`<p>Field-level encryption meaningfully limits what a database compromise yields, and it takes away querying, indexing, sorting and joining on those fields, plus a key management system to run. For a handful of genuinely sensitive columns it is worth it. Applied broadly it makes the application much harder to build for a benefit that at-rest encryption and good access control already largely provide. Decide per field, and write down why, because the next person will otherwise either encrypt everything or nothing.</p>`,
+        pitfall:"Treating at-rest encryption as a general answer to \"is the data safe?\". It answers one question — what happens if someone takes the disk — and it is often cited in response to questions about application compromise, where it does nothing.",
+        exercise:`<p>Grep your logs from the last day for the words password, token, authorization and secret. Then add the redaction layer above, and write the test that posts a known password to the login endpoint and asserts it appears nowhere in the captured log output. Finally, list the fields in your main table and mark which you would still collect if you were starting today.</p>`,
+        refs:[ ["OWASP: logging cheat sheet","https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html"] ] }
+
+    ],
+    after:[
+      ["Choose a session mechanism","You can defend server sessions or tokens for a given application, and set every cookie flag."],
+      ["Store credentials properly","Argon2id with tuned parameters, identical responses whether or not an account exists."],
+      ["Verify a token completely","Signature, algorithm, issuer, audience and expiry, with a revocation answer."],
+      ["Use OAuth for what it is","Delegated access with code plus PKCE, and OIDC when you need identity."],
+      ["Authorize every object","Ownership and tenancy enforced where queries are built, not per handler."],
+      ["Give services their own identity","Scoped, short-lived credentials instead of network trust or a shared key."],
+      ["Never concatenate untrusted input","Parameters, allowlists and resolved paths, in all four places."],
+      ["Set the headers that matter","HSTS, CSP, nosniff and a CORS allowlist that is not a reflection."],
+      ["Keep secrets out of logs","Redaction in the logger, verified by a test, and less data collected to begin with."]
+    ],
+    sources:`<p>Retrieved while writing: <a href="https://datatracker.ietf.org/doc/html/draft-ietf-oauth-v2-1-13" target="_blank" rel="noopener">draft-ietf-oauth-v2-1-13</a>, the OAuth 2.1 framework. The normative wording quoted in that topic is copied from it, and it is narrower than the usual summary: PKCE is required of public clients, and of other clients unless the authorization server has reasonable assurance the client mitigates code injection another way. OAuth 2.1 is still an Internet-Draft, which the topic says.</p>
+      <p>Verified by running, on Node 22 with <code>jsonwebtoken</code> 9.0.3: all four JWT cases. Two of them came out against the conventional advice and changed what this stage emphasises. <code>alg:none</code> was rejected whether or not algorithms were pinned, and an RS256-to-HS256 confusion forgery was rejected too, because the library infers acceptable algorithms from the key type. What <em>was</em> accepted is a correctly signed, unexpired token minted for a different audience, whenever <code>audience</code> was not passed. The topic leads with that rather than with <code>alg:none</code>.</p>
+      <p>References, not retrieved while writing: the OWASP cheat sheets and API Security Top 10 pages, RFC 7519, RFC 8725, RFC 9106, RFC 8705, the cookie draft, OpenID Connect Core, and the MDN pages on CORS and CSP.</p>` }
 ];
 
 const DEPTH = { understand:"Understand", build:"Build" };
