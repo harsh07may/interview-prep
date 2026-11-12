@@ -3212,7 +3212,273 @@ The parts people skip:
     ],
     sources:`<p>Verified while writing, against the live PostgreSQL 16.15 in this container: the outbox table with its partial index, the order and the event committing in one transaction, the relay claim using <code>FOR UPDATE SKIP LOCKED</code> returning the row exactly once, and the consumer dedup insert returning <code>INSERT 0 1</code> on the first delivery and <code>INSERT 0 0</code> on the duplicate.</p>
       <p>Two topics deliberately argue against their own subject. The sagas topic opens by asking whether the services should be one service, because a saga is most often a symptom of a boundary in the wrong place. The read models topic treats event sourcing as a warning rather than a destination, and names the narrow case where it is right.</p>
-      <p>References, not retrieved while writing: the CloudEvents specification.</p>` }
+      <p>References, not retrieved while writing: the CloudEvents specification.</p>` },
+
+{ num:11, id:"storage", phase:4, name:"Storage and external integrations",
+    intro:"Files, bytes, and the other people's systems you have to talk to.",
+    topics:[
+
+      { id:"file-uploads", name:"File uploads",
+        depth:"build", core:true,
+        line:"Everything the client tells you about the file is a claim, including the type.",
+        what:`<p>An upload endpoint accepts arbitrary bytes from anyone. The filename, the declared content type and the size header are all supplied by the caller and all can be false. Treating any of them as fact is how an upload feature becomes a remote code execution.</p>
+              <p>Three things need deciding: how large is too large, what the file actually is, and where it goes.</p>`,
+        use:`<p>A profile-picture endpoint accepts anything with <code>Content-Type: image/png</code> and saves it under the supplied filename in a directory served by the web server. A caller uploads a PHP script declared as an image and then requests it. The declared type was never checked and the file was served from an origin that executes code.</p>`,
+        concepts:[
+          ["Limits at both layers","Your proxy and your application each need a maximum body size. The smaller wins, and a missing one at the proxy is where a surprise 413 comes from."],
+          ["Declared type is a claim","<code>Content-Type</code> and the file extension are caller-controlled. Determine the real type from the leading bytes, and reject anything that disagrees."],
+          ["Generated names","Never use the caller's filename on disk. Generate your own identifier and keep the original only as a display label, escaped."],
+          ["Serve from another origin","User content served from your application's origin inherits your cookies and your trust. A separate domain contains the damage."],
+          ["Streaming","Do not buffer an upload in memory to inspect it. Stream to temporary storage and examine the first bytes as they arrive."]
+        ],
+        how:`<p>Set an explicit maximum at the edge and in the application. Stream the body to temporary storage rather than holding it, read the magic bytes to establish the real type, and reject it if it is not on your allowlist. Then store under a generated name, in object storage, served from a domain that is not your application's.</p>
+              <p>Set <code>Content-Disposition: attachment</code> and <code>X-Content-Type-Options: nosniff</code> on the way back out, so a browser downloads rather than renders anything unexpected.</p>`,
+        code:[ {label:"What to check, in order", code:`ALLOWED = {
+    b"\\x89PNG\\r\\n\\x1a\\n": "image/png",
+    b"\\xff\\xd8\\xff":        "image/jpeg",
+    b"%PDF-":                "application/pdf",
+}
+MAX_BYTES = 10 * 1024 * 1024
+
+def upload(request):
+    if request.content_length and request.content_length > MAX_BYTES:
+        return 413, error("FILE_TOO_LARGE")        # before reading anything
+
+    tmp = stream_to_temp(request.body, limit = MAX_BYTES)   # enforce while reading
+    if tmp.truncated:
+        return 413, error("FILE_TOO_LARGE")        # Content-Length can lie too
+
+    real_type = sniff(tmp.first_bytes(16), ALLOWED)
+    if real_type is None:
+        return 415, error("UNSUPPORTED_MEDIA_TYPE")   # not what it claimed
+
+    key = f"uploads/{uuid7()}{extension_for(real_type)}"   # OUR name
+    object_store.put(key, tmp, content_type = real_type)
+
+    files.insert(key = key, owner = request.user.id,
+                 display_name = sanitize(request.filename),  # label only
+                 size = tmp.size, content_type = real_type)
+    return 201, {"id": key}`} ],
+        tradeoff:`<p>Checking magic bytes catches a mislabelled file and does not make the file safe: a genuine PNG can still carry an exploit for an image library, and a real PDF can contain script. The deeper defences are processing uploads out of process, re-encoding images rather than storing them as received, and serving from an isolated origin. Re-encoding costs CPU and loses metadata, and it is the single most effective step for images, because it discards everything that was not pixels.</p>`,
+        pitfall:"Trusting Content-Length to enforce the size limit. It is a header the caller sets, so it can understate a much larger body. The limit has to be enforced while reading, by stopping at the cap.",
+        exercise:`<p>Take your upload endpoint and try four things: a file larger than the limit with a small <code>Content-Length</code>, a script renamed to <code>.png</code>, a filename containing <code>../</code>, and a 2GB file. Each should fail cleanly and quickly. Then check what origin your uploads are served from.</p>`,
+        refs:[ ["OWASP: file upload cheat sheet","https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html"] ] },
+
+      { id:"object-storage", name:"Object storage and pre-signed URLs",
+        depth:"build", core:false,
+        line:"Keep the bytes out of your service entirely: metadata in your database, file in the store.",
+        what:`<p>Files do not belong in your application's filesystem, which is per-instance and disappears on deploy, and they do not belong in your database, which makes backups enormous and rows expensive to read. They belong in object storage, with a row in your database describing them.</p>
+              <p>The better version goes further: with a pre-signed URL the bytes never pass through your service at all. The client uploads straight to the store, using a URL you authorised.</p>`,
+        use:`<p>Users upload 50MB videos. Proxying them through the application occupies a worker for the whole upload, multiplies bandwidth, and makes a slow mobile connection a slow request in your service. A pre-signed URL moves the transfer to the client and the store, and your service handles two small JSON requests instead.</p>`,
+        concepts:[
+          ["Metadata and bytes","The database holds the identifier, owner, type, size and status. The store holds the bytes. Neither duplicates the other."],
+          ["Pre-signed URL","A time-limited, operation-limited URL your service signs. The client uses it directly, and the store enforces what the signature allows."],
+          ["Conditions on the signature","Bound the content length and type in the signature, or the client can upload a 10GB file of anything to a URL you issued."],
+          ["Pending then ready","A record created before the upload and confirmed after. An unconfirmed record after an hour is an abandoned upload to clean up."],
+          ["Downloads too","A pre-signed GET gives private files a short-lived link without making the object public or proxying the download."]
+        ],
+        how:`<p>Use four steps: the client asks for an upload URL, you create a pending row and return a signed URL with conditions, the client uploads directly, then the client confirms and you mark the row ready. Nothing references a file until it is ready, so an interrupted upload is a pending row your cleanup job removes.</p>`,
+        code:[ {label:"The four steps, and what each protects", code:`1. POST /uploads            client asks
+   -> create row (status = 'pending', owner, declared type)
+   -> sign a PUT URL, 5 minute expiry, with CONDITIONS:
+        content-length-range 1..10485760
+        content-type must equal the declared type
+   -> return { upload_id, url }
+
+2. PUT <url>                client uploads straight to the store
+   -> your service is not involved at all
+   -> the store rejects anything violating the conditions
+
+3. POST /uploads/{id}/complete
+   -> HEAD the object: confirm it exists, check size and type
+   -> sniff the first bytes if the content matters
+   -> status = 'ready'
+
+4. cleanup job
+   -> delete pending rows older than an hour, and their objects
+
+Downloads work the same way: sign a GET with a short expiry rather
+than making the bucket public or streaming the file through your app.`} ],
+        tradeoff:`<p>Proxying uploads through your service lets you validate the bytes before they are ever stored, which is the one real advantage, and it costs you worker time, bandwidth and a request duration you do not control. Pre-signed uploads are cheaper and faster and mean the object exists before you have inspected it, so the validation moves to the confirm step and you must handle an object that fails it. For small files where content validation is the point, proxy. For anything large, sign, and validate on confirm.</p>`,
+        pitfall:"Signing an upload URL with no conditions. The signature authorises a PUT to that key and nothing else is constrained, so the client can store a file of any size and any type, and you are paying for the storage.",
+        exercise:`<p>Implement the four steps for one upload. Then test the parts that matter: use the signed URL after it expires, upload a file larger than the condition allows, and abandon an upload halfway. Confirm the first two are rejected by the store and the third is cleaned up.</p>`,
+        refs:[] },
+
+      { id:"streaming-payloads", name:"Streaming large payloads, imports and exports",
+        depth:"build", core:false,
+        line:"Memory should be a function of how fast you process, not of how big the file is.",
+        what:`<p>Reading a whole file or a whole result set into memory works until the day the file is large. Then one request consumes a gigabyte, the garbage collector struggles, and the process is killed with no stack trace. Streaming makes memory depend on the chunk size rather than the total.</p>
+              <p>The same applies in both directions: an export should be written out as it is produced, not assembled and then sent.</p>`,
+        use:`<p>A customer exports a year of orders as CSV. Built in memory, the response is 400MB and the process dies before sending anything. Streamed row by row from a server-side cursor, memory stays flat, the download starts immediately, and the size of the export stops mattering.</p>`,
+        concepts:[
+          ["Constant memory","Streaming holds one chunk at a time. Memory is set by the chunk size and the buffer, not by the total."],
+          ["Backpressure","A fast reader and a slow writer need the reader to pause. Stream libraries handle this; a manual loop usually does not, and the buffer grows."],
+          ["Time to first byte","A streamed response starts arriving immediately, which keeps proxies and clients from timing out on a long export."],
+          ["Chunked imports","Read, validate and commit in batches, recording the position reached, so a failure resumes rather than restarting."],
+          ["Partial failure","A streamed response has already sent 200 by the time row 90,000 fails. Decide how to signal an error you discover halfway."]
+        ],
+        how:`<p>Use your language's stream primitives and connect them with a pipeline helper, which handles backpressure and cleanup on error. For exports, pair a server-side cursor from the database stage with a streaming response writer. For imports, process in batches with an offset you persist, and report per-row errors rather than failing the whole file.</p>`,
+        code:[ {label:"Node: measured, 77MB file", lang:"js", code:`// Buffered: the entire file is resident before anything happens.
+const buf = fs.readFileSync('big.bin');
+crypto.createHash('sha256').update(buf).digest('hex');
+// rss at start:          42 MB
+// rss after readFileSync: 119 MB      <- grew by the whole file
+
+// Streamed: one chunk at a time, and the pipeline applies backpressure.
+const hash = crypto.createHash('sha256');
+await pipeline(fs.createReadStream('big.bin'), hash);
+// rss at start:      42 MB
+// rss after stream:  74 MB            <- and this does not grow with
+//                                        the file; a 10GB file is the same
+
+// Exports: write as you read, so nothing is ever fully in memory.
+res.writeHead(200, { 'Content-Type': 'text/csv',
+                     'Content-Disposition': 'attachment; filename=orders.csv' });
+res.write('id,created_at,total_cents\\n');
+for await (const row of cursor) {                  // server-side cursor
+  res.write(\`\${row.id},\${row.created_at},\${row.total_cents}\\n\`);
+}
+res.end();`} ],
+        tradeoff:`<p>A streamed response cannot change its mind. The status line and headers are sent before most of the work, so an error discovered at row 90,000 cannot become a 500: the client already has a 200 and most of a file. The options are a trailer the client probably ignores, a deliberately malformed ending, or writing the export to object storage as a job and giving the client a link when it is complete. For anything a customer relies on, the job plus a link is the sturdier design, and streaming is for the interactive case where the user is waiting.</p>`,
+        pitfall:"Building a large response as a string or array and sending it at the end. It passes every test with a small dataset, and it is the same code path that kills the process on the biggest customer's export.",
+        exercise:`<p>Take an export endpoint and measure its peak memory for a small and a large dataset. Convert it to stream from a cursor and measure again: the two figures should now be the same. Then kill the client mid-download and confirm your server stops querying rather than continuing to produce rows for nobody.</p>`,
+        refs:[] },
+
+      { id:"third-party-apis", name:"Consuming third-party APIs",
+        depth:"build", core:false,
+        line:"Someone else's uptime, rate limits and clock become part of your service.",
+        what:`<p>Calling an external API makes their availability yours. Beyond the reliability patterns in the next stage, integrations have their own specific concerns: credentials that differ per environment, their rate limits, their idempotency mechanism, and the fact that you cannot run their service in your tests.</p>`,
+        use:`<p>An integration works perfectly for months and then starts failing every Monday morning. The provider's rate limit is per calendar day in their timezone, your nightly sync runs at a time that happens to land in their peak, and your client retries immediately on 429 without reading <code>Retry-After</code>, turning a brief limit into an hour-long lockout.</p>`,
+        concepts:[
+          ["Separate credentials","Sandbox and production keys, never the same value, and never a production key on a developer machine. A test that charges a real card is a story every team has."],
+          ["Their rate limits","Read the documented limit and respect the headers. A retry that ignores <code>Retry-After</code> extends the block rather than waiting it out."],
+          ["Their idempotency key","Most payment and messaging providers accept one. Pass your own stable identifier so your retry does not become their duplicate."],
+          ["An anti-corruption layer","One module that owns the provider's shapes and translates to yours. When you change provider, or they change their API, one file changes."],
+          ["Recorded responses","Capture real responses once and replay them in tests. Faster, deterministic, and it does not depend on their sandbox being up."]
+        ],
+        how:`<p>Wrap every provider in a thin interface of your own, with your types on the outside. Put the deadline, the retry policy and the credential inside it, so every call through it behaves consistently and a change to the policy is one edit.</p>
+              <p>Then record real responses, including the error ones, and use them as fixtures. The errors are the part you will never reproduce on demand and the part your handling is least tested against.</p>`,
+        code:[ {label:"One module owns the provider", code:`class PaymentGateway:                 # our interface, our types
+    def charge(self, amount_cents, currency, idempotency_key) -> Charge: ...
+
+class StripeGateway(PaymentGateway):  # their shapes stop here
+    def charge(self, amount_cents, currency, idempotency_key):
+        r = self.http.post("/v1/charges",
+                           data   = {...},                    # their field names
+                           headers= {"Idempotency-Key": idempotency_key},
+                           timeout= 5.0)                      # always a deadline
+        if r.status == 429:
+            raise RateLimited(retry_after = int(r.headers.get("Retry-After", 5)))
+        if r.status >= 500:
+            raise Retryable(r.text)
+        if r.status == 402:
+            raise CardDeclined(code = r.json()["error"]["decline_code"])
+        return Charge(id = r.json()["id"],                    # our type
+                      amount_cents = r.json()["amount"])
+
+# Tests use a fake implementing PaymentGateway, built from responses
+# recorded from the real sandbox once, including the 402 and the 429.`} ],
+        tradeoff:`<p>Their official SDK handles authentication, retries, pagination and serialization for you, and it brings a dependency, its own opinions about timeouts, and an upgrade treadmill. A thin hand-rolled client over plain HTTP is more code and leaves you in control of the deadline and the error mapping, which is what matters when they are slow. Use the SDK for anything with real protocol complexity, such as OAuth-heavy or streaming APIs, and write your own for a handful of straightforward REST calls, in both cases behind your own interface.</p>`,
+        pitfall:"Calling a provider directly from several places in the codebase. Their timeout, retry behaviour and error mapping are then slightly different at each call site, and the day they change a field you have to find every one.",
+        exercise:`<p>Pick an integration and check three things: does every call have an explicit deadline, does a 429 respect <code>Retry-After</code>, and is there one module that owns the provider's shapes. Then record one real success and one real error response and write a test that uses them, so your error handling is exercised without the provider.</p>`,
+        refs:[] },
+
+      { id:"receiving-webhooks", name:"Receiving webhooks",
+        depth:"build", core:true,
+        line:"Verify the signature over the raw bytes, before parsing, or the verification is theatre.",
+        what:`<p>A webhook endpoint is a public URL that anybody can call. The only thing distinguishing a genuine delivery from an attacker's is the signature, which means the verification has to be exactly right: over the bytes as received, in constant time, with a timestamp window to stop replay.</p>
+              <p>And the handler has to be fast and idempotent, because providers retry and they time out quickly.</p>`,
+        use:`<p>A payment provider posts <code>payment.succeeded</code>. An attacker who knows the URL posts the same JSON with an amount they chose. Without verification you mark an unpaid order paid. With verification over a re-serialised body rather than the raw bytes, your genuine deliveries start failing instead, which is how the bug is usually discovered.</p>`,
+        concepts:[
+          ["Raw bytes","The signature covers exactly what was sent. Parsing and re-serialising changes whitespace, number formatting and escapes, so the recomputed signature will not match."],
+          ["Constant-time comparison","Comparing signatures with ordinary string equality leaks timing information. Use the library's timing-safe comparison."],
+          ["Timestamp window","Include a timestamp in the signed material and reject anything outside a few minutes, so a captured request cannot be replayed later."],
+          ["Acknowledge fast","Providers time out in seconds and retry. Verify, persist, return 200, and do the work in a job."],
+          ["Idempotent by event id","Delivery is at-least-once. Dedupe on the provider's event id exactly as the messaging stage describes."]
+        ],
+        how:`<p>Configure your framework to keep the raw body for this route, which usually means an exception to the global JSON parser. Verify over the raw bytes, then parse. Store the event, acknowledge, and process asynchronously.</p>`,
+        code:[ {label:"Node: verification, and the bug", lang:"js", code:`const sign = (ts, raw) =>
+  crypto.createHmac('sha256', SECRET).update(\`\${ts}.\${raw}\`).digest('hex');
+
+function verify(body, ts, header_sig, now = Date.now()/1000) {
+  if (Math.abs(now - ts) > 300) return 'rejected: timestamp outside window';
+  const a = Buffer.from(sign(ts, body)), b = Buffer.from(header_sig);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b))
+    return 'rejected: signature mismatch';
+  return 'accepted';
+}
+
+// raw bytes as received    : accepted
+// parsed then re-serialised: rejected: signature mismatch
+//     on the wire : "{\\n  \\"id\\": \\"evt_1\\",\\n  \\"amount\\": 4999.0, ...}"
+//     recreated   : "{\\"id\\":\\"evt_1\\",\\"amount\\":4999,\\"note\\":\\"café\\"}"
+//
+// Three differences in one small payload: whitespace removed, 4999.0
+// became 4999, and the \\u00e9 escape became a literal character.
+//
+// tampered amount       : rejected: signature mismatch
+// replayed 10 min later : rejected: timestamp outside window`} ],
+        tradeoff:`<p>Processing inline is simpler and means the provider's retry is your retry: if your handler throws, they send it again, which is a free queue. It also means a slow handler causes their timeout, their retries pile up, and a burst of events becomes a burst of synchronous work. Acknowledging fast and queueing is more moving parts and the right default, because it decouples your processing time from their patience. If you do process inline, keep it to a database write and nothing external.</p>`,
+        pitfall:"Letting the framework's JSON middleware consume the body before your handler sees it. You then verify against a reconstruction, which fails on genuine deliveries for reasons that look random, and the usual fix applied under pressure is to stop verifying.",
+        exercise:`<p>Take a webhook endpoint and send it three requests: a valid one, one with the body altered by a single character, and a valid one with a timestamp ten minutes old. Confirm accept, reject, reject. Then send the same valid delivery twice and confirm the side effect happens once.</p>`,
+        refs:[] },
+
+      { id:"sending-webhooks", name:"Sending webhooks",
+        depth:"build", core:false,
+        line:"You are now somebody's unreliable dependency, and the URL is attacker-chosen.",
+        what:`<p>Letting customers register a URL you will call makes you a delivery system, with all the obligations: retries, ordering questions, a visible history, and a way to stop calling an endpoint that has been broken for a week.</p>
+              <p>It also hands an attacker something valuable: a URL of their choosing that your server will request from inside your network.</p>`,
+        use:`<p>A customer registers <code>http://169.254.169.254/latest/meta-data/iam/</code> as their webhook URL. Your delivery worker requests it from inside your infrastructure and faithfully records the response body in the delivery log, which the customer can then read in your dashboard. You have handed over your instance credentials through a feature.</p>`,
+        concepts:[
+          ["This is SSRF","Subscriber URLs are caller-controlled requests from your network. Every defence from the untrusted input topic applies, and the response must never be shown back."],
+          ["Sign what you send","An HMAC over a timestamp and the body, with a per-subscription secret, so the receiver can verify. You are the provider in the previous topic."],
+          ["Retry with backoff","Treat a receiver as unreliable: bounded retries, exponential backoff with jitter, and give up eventually rather than retrying forever."],
+          ["Delivery log","Every attempt, its status and its response, visible to the subscriber. It is the first thing they will ask for, and it stops the support conversation being guesswork."],
+          ["Automatic disabling","A subscription failing for days should be suspended and the owner notified. Otherwise you spend capacity calling a dead endpoint indefinitely."]
+        ],
+        how:`<p>Validate the URL at registration and again before every delivery, because DNS can change between the two: require HTTPS, resolve the host and reject private, loopback and link-local addresses, and refuse to follow redirects. Then deliver from a worker pool with per-subscription concurrency, so one slow receiver does not consume your delivery capacity.</p>
+              <p>Give subscribers the two things they always need: a signature they can verify, and a log they can read.</p>`,
+        code:[ {label:"Registration and delivery, both guarded", code:`def register(url, owner):
+    if not url.startswith("https://"):        reject("HTTPS_REQUIRED")
+    if not resolves_to_public_address(url):   reject("PRIVATE_ADDRESS")
+    secret = random_secret()                  # per subscription
+    return save(url=url, owner=owner, secret=secret, status="active")
+
+def deliver(subscription, event):
+    if not resolves_to_public_address(subscription.url):   # re-check: DNS moves
+        return disable(subscription, "resolved to a private address")
+
+    ts   = now_unix()
+    body = canonical_json(event)
+    sig  = hmac_sha256(subscription.secret, f"{ts}.{body}")
+
+    r = http.post(subscription.url, body=body, timeout=10,
+                  follow_redirects=False,                  # a redirect is a new URL
+                  headers={"X-Signature": sig, "X-Timestamp": str(ts),
+                           "X-Event-Id": event.id})
+
+    log_attempt(subscription, event, r.status, r.body[:1000])   # for THEM to read
+    if r.status >= 300:
+        schedule_retry(subscription, event, backoff_with_jitter(attempt))
+    if consecutive_failures(subscription) > 100:
+        disable(subscription, "too many consecutive failures")`} ],
+        tradeoff:`<p>Guaranteeing ordered delivery per subscriber means one in-flight request at a time for that subscriber, so one slow receiver throttles their own stream and you hold a queue per subscription. Unordered parallel delivery is far more efficient and means events can arrive out of order, which you must then document so receivers sort by the event timestamp. Most providers choose unordered-and-documented, because ordered delivery over an unreliable receiver is a promise you cannot really keep.</p>`,
+        pitfall:"Recording the receiver's response body in a log the subscriber can read, without restricting which addresses you call. That combination turns the delivery log into a window onto your internal network, which is exactly what the metadata endpoint attack exploits.",
+        exercise:`<p>Try to register a webhook pointing at <code>http://localhost</code>, at a private address, and at a public hostname whose DNS record you then change to a private address. All three should be refused, the third at delivery time. Then check whether your delivery log shows response bodies and who can read it.</p>`,
+        refs:[ ["OWASP: SSRF prevention cheat sheet","https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html"] ] }
+
+    ],
+    after:[
+      ["Accept a file safely","Limits enforced while reading, real type from the bytes, your filename, another origin."],
+      ["Keep bytes out of the service","Pre-signed uploads with conditions, pending-then-ready rows, and a cleanup job."],
+      ["Hold constant memory","Streamed imports and exports whose memory does not depend on the size."],
+      ["Integrate defensively","One module per provider, a deadline on every call, their idempotency key, recorded fixtures."],
+      ["Verify a webhook properly","Raw bytes, constant time, timestamp window, fast acknowledgement, idempotent handler."],
+      ["Send webhooks without opening a hole","Signed payloads, a readable delivery log, and subscriber URLs treated as SSRF."]
+    ],
+    sources:`<p>Verified by running, on Node 22 in this container: the webhook signature cases, where the re-serialisation failure is real and the payload shows three distinct causes in one body (whitespace removed, <code>4999.0</code> rendered as <code>4999</code>, and <code>\\u00e9</code> turned into a literal character), and the streaming comparison on a 77MB file, where buffered reading grew resident memory from 42MB to 119MB while streaming grew it to 74MB and does not grow with the file.</p>
+      <p>My first attempt at the re-serialisation example was not a demonstration at all: the payload happened to be in canonical compact form, so it round-tripped byte-identically and the signature still matched. It was replaced with a payload that differs, which is what a real provider sends.</p>
+      <p>References, not retrieved while writing: the OWASP file upload and SSRF cheat sheets.</p>` }
 ];
 
 const DEPTH = { understand:"Understand", build:"Build" };
