@@ -2609,7 +2609,281 @@ systems are worse, because arrivals are burstier than the model.`} ],
     ],
     sources:`<p>Verified by running, in this container: the stampede comparison on Node 22 (200 concurrent misses produce 200 database calls naively and exactly 1 with single-flight), the ETag exchange against a real HTTP server, where the 304 response carried a zero-byte body, the Redis commands against Redis 7.0.15 with the output shown, and the unbounded-cache growth from 3.5MB to 73.7MB of heap across 200,000 requests.</p>
       <p>The queueing table is computed from the M/M/1 formula rather than measured, and the topic says so: it is presented as the shape of the curve, with a note that real systems are worse because arrivals are burstier than the model assumes.</p>
-      <p>References, not retrieved while writing: RFC 9111 for HTTP caching and the Redis data types documentation.</p>` }
+      <p>References, not retrieved while writing: RFC 9111 for HTTP caching and the Redis data types documentation.</p>` },
+
+{ num:9, id:"concurrency", phase:4, name:"Concurrency and asynchronous work",
+    intro:"Doing several things at once, on purpose, with a limit.",
+    topics:[
+
+      { id:"async-io", name:"Async I/O in your code: what actually yields, and how pools starve",
+        depth:"build", core:true,
+        line:"Async is about waiting, not speed, and an await inside a loop throws the benefit away.",
+        what:`<p>Asynchronous code does not make anything faster. It makes waiting cheap, so one thread can have many operations in flight. The gain comes entirely from overlapping waits, which means the gain disappears the moment you wait for each one in turn.</p>
+              <p>The stage on runtime foundations covered how your server handles many requests. This is about your own code inside one of them.</p>`,
+        use:`<p>An endpoint enriches an order with data from three services. Written as three sequential awaits it takes the sum of the three latencies. The three calls do not depend on each other, so written as one concurrent wait it takes the slowest of the three. Same code, same services, a third of the time.</p>`,
+        concepts:[
+          ["Only I/O yields","<code>await</code> hands control back only when something is genuinely waiting. Awaiting a computation yields nothing, and a tight CPU loop in an async function blocks everything."],
+          ["Await in a loop","Serialises work that could overlap. The single most common async mistake, and invisible in review because the code reads naturally."],
+          ["Concurrent, not parallel","On one thread these calls overlap their waits; they do not run at the same time. For CPU work you need a worker thread or another process."],
+          ["Pool starvation","A thread-per-request runtime has a bounded pool. Blocking a pooled thread on an async result occupies it while it waits, and at enough concurrency every thread is waiting on work that needs a thread."],
+          ["Partial failure","Running ten things concurrently means deciding what happens when three fail. Fail everything, or collect results and handle each? The default usually fails fast, which is rarely what you want for enrichment."]
+        ],
+        how:`<p>Start work before awaiting it. Collect the promises or futures first, then await them together, and bound how many run at once when the collection is large: unbounded concurrency against a dependency is a denial of service you are performing on yourself.</p>`,
+        code:[ {label:"Node: the same ten calls, three ways", lang:"js", code:`const fetchOne = async (i) => { await sleep(100); return i; };  // 100ms wait
+
+// Serialised: each await finishes before the next begins.
+for (let i = 0; i < 10; i++) a.push(await fetchOne(i));
+// await in a loop:     1005 ms
+
+// Concurrent: all ten in flight, wait once.
+await Promise.all(Array.from({length: 10}, (_, i) => fetchOne(i)));
+// Promise.all:          100 ms
+
+// Bounded: 50 items, at most 5 at a time. Ten batches of 100ms.
+await mapWithLimit(items, 5, fetchOne);
+// limit of 5, 50 items: 1005 ms
+
+async function mapWithLimit(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i]);
+    }
+  }
+  await Promise.all(Array.from({length: limit}, worker));
+  return results;
+}`},
+               {label:"C#: blocking on async, which empties the pool", lang:"cs", code:`// Wrong. This occupies a pool thread while waiting for work that may
+// itself need a pool thread. Under load the pool empties and the
+// service stops responding, with low CPU and no errors in the log.
+var result = GetOrderAsync(id).Result;        // or .Wait(), or .GetAwaiter().GetResult()
+
+// Right: stay asynchronous all the way up to the framework.
+var result = await GetOrderAsync(id);
+
+// And for library code that does not need the request context back,
+// avoid capturing it:
+var result = await GetOrderAsync(id).ConfigureAwait(false);`} ],
+        tradeoff:`<p>Concurrency is bounded by something whether you choose it or not. Choose it yourself and the limit is visible, tunable and matched to what the dependency can take. Leave it unbounded and the limit becomes whichever downstream thing collapses first, usually a connection pool or the other service. The cost of choosing is one parameter you have to pick and occasionally revisit; the cost of not choosing is an incident that looks like the dependency's fault.</p>`,
+        pitfall:"Reaching for Promise.all on a list of unknown length. Ten concurrent calls is an optimisation; ten thousand is an attack on your own database, and the list is user-supplied often enough that it will happen.",
+        exercise:`<p>Find an endpoint with two or more independent awaits in sequence and make them concurrent. Measure before and after. Then find a place that maps over a user-supplied list with <code>Promise.all</code> or equivalent, and put a limit on it. Decide explicitly what should happen when some of them fail.</p>`,
+        refs:[] },
+
+      { id:"background-jobs", name:"Background jobs: moving work out of the request",
+        depth:"build", core:true,
+        line:"If the caller does not need the result, do not make them wait for it.",
+        what:`<p>A request should do the minimum needed to answer correctly. Everything else — sending the email, generating the invoice, warming the cache, notifying the warehouse — belongs in a job, because it makes the response slower, makes the request more likely to fail, and ties work that can be retried to one that cannot.</p>`,
+        use:`<p>Placing an order sends a confirmation email inline. The mail provider has a slow afternoon, checkout latency triples, and when the provider times out the whole order fails after the payment has already been taken. Moving the email to a job makes checkout fast and makes the email independently retryable.</p>`,
+        concepts:[
+          ["The rule","If the caller does not need it to answer, and it can be retried, it is a job. Slow, flaky or non-essential work all qualify."],
+          ["The job record","A row describing the work, written in the same transaction as the change that triggered it. The queue is a delivery mechanism; the row is the truth."],
+          ["Idempotent handlers","A job will run more than once. Design the handler so a repeat is harmless, which the messaging stage covers in depth."],
+          ["Visibility","A queued job disappears from the user's view. Status on the resource, and a way to see failures, are part of the feature, not extras."],
+          ["Small payloads","Put an identifier in the job, not the whole object. The object may have changed by the time the job runs, and the row is the current truth."]
+        ],
+        how:`<p>Write the job in the same transaction as the state change it follows, so you cannot commit the order and lose the email. If the queue is a separate system, that is the dual-write problem, and the outbox pattern in the messaging stage is the answer.</p>
+              <p>Give every job a status, an attempt count and a last error on its row, so "why has this customer not received their invoice" is a query rather than a log search.</p>`,
+        code:[ {label:"What belongs where", code:`POST /orders
+
+in the request (the caller needs these to be true):
+    validate the input
+    reserve stock          -> affects whether the order can exist
+    take payment           -> the answer depends on it
+    write the order        -> this is the response
+    enqueue the rest       -> same transaction as the write
+
+in jobs (the caller does not need these to answer):
+    send the confirmation email      retryable, external, slow
+    generate the invoice PDF         slow, nobody is waiting
+    notify the warehouse             external, must not fail checkout
+    update the recommendation model  nobody will ever notice the delay
+
+job row, not just a queue message:
+    id, type, payload_id, status, attempts, last_error,
+    run_after, created_at, completed_at`} ],
+        tradeoff:`<p>A database-backed job table is transactional with your data, queryable with SQL, and trivially debuggable, and it polls, which costs a little latency and a little load. A dedicated broker gives you push delivery, better throughput and built-in retry semantics, and it is a second system that is not transactional with your database. For most services below a few thousand jobs a minute, the table is the better engineering trade and the one people skip past too quickly. Move to a broker when throughput or fan-out genuinely demands it.</p>`,
+        pitfall:"Enqueuing the job before the transaction commits. The worker is fast enough to pick it up and find no row, or worse, the transaction rolls back and the email goes out for an order that does not exist.",
+        exercise:`<p>Take an endpoint that does something external inline and move it to a job, with the job written in the same transaction. Then make the external call fail permanently and confirm two things: the endpoint still succeeds, and the failure is visible somewhere a support engineer would look.</p>`,
+        refs:[] },
+
+      { id:"scheduled-work", name:"Scheduled work, overlapping runs and singletons",
+        depth:"build", core:false,
+        line:"A timer inside your service runs once per instance, which is rarely what you meant.",
+        what:`<p>Periodic work looks simple and has three failure modes that only appear in production: it runs on every instance instead of once, a slow run overlaps the next one, and runs are silently missed while the service is down or being deployed.</p>`,
+        use:`<p>A nightly job emails every customer their statement. It runs from a timer inside the application. The service runs three replicas, so every customer gets three statements. Nobody notices in staging, where there is one instance.</p>`,
+        concepts:[
+          ["Once per instance","An in-process timer fires in every process. With N replicas the job runs N times, concurrently."],
+          ["Overlap","If a run takes longer than the interval, the next one starts while the first is going. Two copies of a job that assumed it was alone."],
+          ["Missed runs","A job scheduled for a moment the service was restarting simply does not happen. Nothing reports it, because nothing was running to report it."],
+          ["Lease or lock","A shared claim that makes one instance the runner. A database advisory lock is the simplest form and needs no new infrastructure."],
+          ["Catch-up","Decide explicitly whether a missed run should be skipped or run late. Both are valid, and leaving it undecided means it is skipped silently."]
+        ],
+        how:`<p>Make the job claim a lock before doing anything, and skip the run if it cannot. In PostgreSQL an advisory lock does this with no extra table, and it releases automatically when the connection goes away, which handles a crashed instance without a stuck lease.</p>
+              <p>Record the start and end of every run in a table, and alert when an expected run has not completed. Silent non-execution is the failure mode nobody builds for, and the one that costs the most, because it is discovered weeks later by a customer.</p>`,
+        code:[ {label:"Postgres: one instance wins, verified", lang:"sql", code:`-- Instance A
+select pg_try_advisory_lock(42);
+--  t          <- A runs the job
+
+-- Instance B, at the same moment
+select pg_try_advisory_lock(42);
+--  f          <- B skips this run, and does not block
+
+-- Instance A finishes
+select pg_advisory_unlock(42);
+--  t
+
+-- Instance B, next tick
+select pg_try_advisory_lock(42);
+--  t
+
+-- try_ rather than the blocking form: a second instance should skip
+-- the run, not queue up to do it again afterwards. The lock is tied to
+-- the session, so a crashed instance releases it automatically.`} ],
+        tradeoff:`<p>An in-process scheduler is zero infrastructure and makes the job part of the application, deployed and versioned with it, at the cost of needing the lock above and of never knowing about missed runs. An external scheduler, such as a platform cron, handles the singleton problem for you and makes the job a separate deployable with its own image and configuration drift. For one or two jobs, in-process with a lock is simpler and perfectly sound. Beyond that, or when the schedule needs to be visible to people who do not deploy the service, external wins.</p>`,
+        pitfall:"Assuming a job that takes five minutes will not overlap a ten-minute schedule. One slow day, a lock contention, a large month-end batch, and two copies run concurrently against data that assumed exclusive access.",
+        exercise:`<p>Take a scheduled job and run three instances of the service locally. Confirm it runs three times. Add the advisory lock and confirm it runs once. Then make the job take longer than its interval and check that the second tick skips rather than overlapping. Finally, add a run record and an alert for a run that did not happen.</p>`,
+        refs:[ ["PostgreSQL: advisory locks","https://www.postgresql.org/docs/current/explicit-locking.html"] ] },
+
+      { id:"shared-state", name:"Shared state: races, atomic updates and compare-and-swap",
+        depth:"build", core:true,
+        line:"Read, decide, write is a race whenever two of anything can run at once.",
+        what:`<p>Any sequence that reads a value, computes from it, and writes it back is wrong under concurrency unless something makes the sequence atomic. Between the read and the write, someone else can change it, and your write is then based on a value that is no longer true.</p>
+              <p>This is the same shape as the lost update in the database stage, and it appears in three places: inside one process, across processes through a shared store, and across services.</p>`,
+        use:`<p>A promotional code is limited to 100 uses. The handler counts existing uses, checks it is below 100, and inserts. Under load, 140 requests all count 99 and all insert. The check was correct, ran correctly, and allowed 140 uses, because 140 copies of it ran between the count and the insert.</p>`,
+        concepts:[
+          ["Read-modify-write","The dangerous pattern. If the read and the write are separate operations, something can happen in between."],
+          ["Atomic operation","One indivisible step the store guarantees: <code>UPDATE ... SET n = n + 1</code>, Redis <code>INCR</code>, an insert against a unique constraint."],
+          ["Compare-and-swap","Write only if the value is still what you read: a version column, or a conditional update. If it changed, you reload and retry."],
+          ["In-process is not enough","A mutex protects one process. With two instances it protects nothing, and the bug returns the day you scale out."],
+          ["Let the constraint decide","Often the best answer is not a lock at all: a unique constraint or a check in the database makes the invalid state impossible regardless of ordering."]
+        ],
+        how:`<p>Work down this list in order and stop at the first one that fits. Can the database do it in one statement? Can a constraint make the bad state impossible? Can you use a version column and retry? Only then reach for a lock, and if the lock must span processes, read the next topic first.</p>`,
+        code:[ {label:"Four fixes, in the order to try them", code:`# The race: 140 requests all read 99.
+uses = count_uses(code)
+if uses < 100: insert_use(code, user)
+
+# 1. One atomic statement. The database decides, once.
+#    insert ... select ... where (select count(*) from uses
+#                                 where code = $1) < 100
+
+# 2. A constraint that makes the bad state impossible. Give each use a
+#    sequence number and make (code, seq) unique with seq < 100: the
+#    101st insert fails rather than being prevented by a check.
+
+# 3. Compare-and-swap on a counter column.
+#    update promo set used = used + 1
+#     where code = $1 and used < 100          -- 0 rows means full
+#    returning used
+
+# 4. A lock, only if none of the above fit.
+#    select * from promo where code = $1 for update
+
+# In-process only, and only for in-process state:
+with mutex: cache.evict_oldest()     # protects one process, not two`} ],
+        tradeoff:`<p>An atomic statement is fastest and least flexible: the logic has to be expressible in the store. Compare-and-swap keeps the logic in your code and costs a retry loop whose cost rises with contention. A lock is the most general and serialises everyone, so on a hot row it becomes the bottleneck. The ordering above is by how much concurrency each one preserves, and it is worth working through it rather than reaching for the familiar lock, which is the most expensive answer on the list.</p>`,
+        pitfall:"Protecting shared state with an in-process mutex in a service that runs more than one instance. The code looks synchronised, passes every local test, and provides no protection at all in production.",
+        exercise:`<p>Find a check-then-act sequence in your codebase: counting before inserting, checking stock before decrementing, verifying uniqueness before creating. Write a test that fires fifty concurrent requests at it and asserts the invariant held. Then fix it with the highest item on the list above that fits, and run the test again.</p>`,
+        refs:[] },
+
+      { id:"distributed-locks", name:"Distributed locks and leases",
+        depth:"understand", core:false,
+        line:"Usually the wrong tool: a constraint is correct where a lock is only probable.",
+        what:`<p>A distributed lock lets one process at a time do something across a cluster. It is reached for far more often than it is needed, and it is harder to make correct than it looks, because a lock held across a network can expire while its holder still believes it holds it.</p>
+              <p>Start from the assumption that you do not need one, and look for a constraint or an atomic operation instead. Those are correct by construction; a lock is correct only while the timing cooperates.</p>`,
+        use:`<p>A nightly reconciliation must run once across ten instances. That is a genuine use: there is no row to make unique and no counter to increment atomically, just an activity that must not happen twice. A lease is the right tool, and it still needs an answer for what happens if the holder stalls past the expiry.</p>`,
+        concepts:[
+          ["Lease, not lock","A distributed lock must expire, or a crashed holder blocks everyone forever. Expiry means it can expire while the holder is still working."],
+          ["The stall problem","A garbage collection pause, a slow disk or a network partition can stop the holder for longer than the lease. Two processes then believe they hold it."],
+          ["Fencing token","A number that increases with each grant. The protected resource rejects writes carrying an old token, which makes a stale holder harmless."],
+          ["Clock dependence","Expiry is measured by clocks on different machines. Skew makes the lease shorter or longer than intended, which the clocks topic revisits."],
+          ["Redlock is contested","The multi-node Redis locking algorithm has been publicly disputed by serious people on both sides. That dispute is itself the argument for not relying on a lock for correctness."]
+        ],
+        how:`<p>If you need mutual exclusion for an activity rather than a row, use a lease with an expiry comfortably longer than the work, and renew it while working. If the protected thing is a write to a store you control, add a fencing token so a stale holder's write is rejected rather than merely unlikely.</p>
+              <p>If the protected thing is a row, you almost certainly want the previous topic instead: a conditional update or a unique constraint gives you the same guarantee without any of this.</p>`,
+        code:[ {label:"When to use what", code:`Need: only one of N instances runs a nightly job
+   -> a lease. pg_try_advisory_lock, or SET NX EX in Redis.
+      Correctness requirement is weak: running twice is wasteful,
+      not wrong, provided the job is idempotent.
+
+Need: a counter must not exceed a limit
+   -> NOT a lock. An atomic conditional update:
+      update promo set used = used + 1 where code = $1 and used < 100
+
+Need: only one order per idempotency key
+   -> NOT a lock. A unique constraint, as in the idempotency topic.
+
+Need: exclusive access to an external resource that cannot be made
+      idempotent, where running twice is genuinely harmful
+   -> a lease WITH a fencing token, and the resource must check it:
+
+      token = acquire_lease("job", ttl=60)    # 41, then 42, then 43...
+      do_work()
+      resource.write(data, fence=token)       # rejects anything < 43
+
+Without the fence, "I hold the lease" means "I held it when I last
+checked", which is not the same thing.`} ],
+        tradeoff:`<p>A lease is cheap and good enough when running twice is merely wasteful, which covers most scheduled work. It is not good enough when running twice is harmful, and the honest options there are a fencing token the resource enforces, or restructuring the work to be idempotent so that running twice stops mattering. The second is almost always the better investment: idempotency is useful everywhere and a lock is useful only while it holds.</p>`,
+        pitfall:"Treating a lock acquisition as a guarantee held for the duration of the work. It is a guarantee held at the instant you acquired it. Anything that pauses your process longer than the lease, including garbage collection, invalidates it without telling you.",
+        exercise:`<p>Find a distributed lock in a system you work on, or a place someone proposed one. For each, decide which case it is: lease-and-idempotent, or something a constraint should have handled. Then take one and ask what would happen if the holder paused for twice the lease duration, and whether anything would detect it.</p>`,
+        refs:[ ["Redis: distributed locks, including the critique","https://redis.io/docs/latest/develop/use-cases/patterns/distributed-locks/"] ] },
+
+      { id:"backpressure", name:"Concurrency limits and backpressure",
+        depth:"build", core:false,
+        line:"An unbounded queue turns an overload into a timeout for everyone instead of a refusal for some.",
+        what:`<p>When work arrives faster than you can do it, something has to give. Without a limit, requests accumulate in a queue, latency climbs until everything times out, and you do a great deal of work whose results nobody is waiting for any more. Rejecting some requests quickly is better than failing all of them slowly.</p>
+              <p>Backpressure is the signal that travels back up the chain: I cannot take more right now.</p>`,
+        use:`<p>A traffic spike doubles arrivals. With an unbounded queue, every request waits 30 seconds, every client times out at 10 seconds and retries, the retries join the queue, and the service spends its entire capacity producing responses to requests that were abandoned. It does not recover until traffic stops.</p>`,
+        concepts:[
+          ["Bounded queues","Every buffer needs a maximum. An unbounded queue converts a throughput problem into a latency problem and then into a memory problem."],
+          ["Load shedding","Rejecting work you cannot do in time, immediately, with 429 or 503 and a <code>Retry-After</code>. Fast rejection is a feature."],
+          ["Concurrency limit per dependency","A separate cap for each downstream, so a slow one consumes its own budget and not all of it. This is the bulkhead from the reliability stage."],
+          ["Timeout as a queue limit","A request that has already waited longer than its client's timeout is dead. Checking a deadline before starting work avoids doing it for nobody."],
+          ["Propagating pressure","A full queue should slow the producer, not silently buffer. In streaming this is built in; in HTTP it is the 429 you return."]
+        ],
+        how:`<p>Put an explicit limit on in-flight work at the entry point, and shed beyond it rather than queueing. Give each downstream dependency its own concurrency budget. Carry a deadline with each request and check it before starting expensive work, so you do not spend capacity on a caller who has already given up.</p>`,
+        code:[ {label:"Shed rather than queue", code:`MAX_IN_FLIGHT = 100
+in_flight = 0
+
+def handle(request):
+    global in_flight
+    if in_flight >= MAX_IN_FLIGHT:
+        return 503, {"code": "OVERLOADED"}, {"Retry-After": "1"}
+
+    if request.deadline and now() > request.deadline:
+        return 504, {"code": "DEADLINE_EXCEEDED"}   # nobody is waiting
+
+    in_flight += 1
+    try:     return do_work(request)
+    finally: in_flight -= 1
+
+# Per-dependency budgets, so one slow upstream cannot consume them all:
+#   payments:  20 concurrent
+#   search:    10 concurrent
+#   email:      5 concurrent
+#
+# Set MAX_IN_FLIGHT from the capacity you measured in the load test,
+# not from a round number. The point is to reject at a level you know
+# you can serve, which means you had to measure it first.`} ],
+        tradeoff:`<p>A low limit protects latency and rejects work you might have managed; a high one accepts more and degrades everyone when you cannot keep up. The asymmetry favours the low limit: a rejected request is a clear signal the client can act on by backing off, while a request that takes 40 seconds and then times out has consumed your capacity and told the client nothing useful. Pick the limit from your measured capacity, which is the rate at which p99 starts climbing, not the rate at which errors start.</p>`,
+        pitfall:"Adding a queue to absorb bursts without bounding it. It absorbs the burst, and then it absorbs the next one, and by the time anyone looks the service has a ten-minute backlog of requests whose clients disconnected nine minutes ago.",
+        exercise:`<p>Add an in-flight limit to one service, set from the capacity number in your load test, and confirm that beyond it you get immediate 503s rather than slow 200s. Then compare the two behaviours under a burst: total successful requests, and p99 for the ones that succeeded. Shedding usually wins on both.</p>`,
+        refs:[] }
+
+    ],
+    after:[
+      ["Overlap waits deliberately","Independent calls run concurrently, with a limit you chose."],
+      ["Keep requests small","Anything the caller does not need is a job, enqueued in the same transaction."],
+      ["Run periodic work once","A lease, a run record, and an alert for the run that did not happen."],
+      ["Remove read-modify-write","Atomic statements and constraints before version columns, and locks last."],
+      ["Argue against a distributed lock","You can say when a lease is enough and when only a fence or idempotency will do."],
+      ["Shed instead of queueing","A bounded in-flight limit set from measured capacity, and per-dependency budgets."]
+    ],
+    sources:`<p>Verified by running, in this container: the three async timings on Node 22 (1005ms serialised, 100ms concurrent, 1005ms for 50 items at a limit of 5), and the PostgreSQL advisory lock sequence, where the second instance received <code>f</code> and acquired the lock only after the first released it.</p>
+      <p>The Redlock dispute is described as contested rather than settled, because it is: the topic's point is that a lock whose safety is argued about is not a thing to rely on for correctness, whichever side is right.</p>
+      <p>References, not retrieved while writing: the PostgreSQL advisory lock documentation and the Redis distributed locks page.</p>` }
 ];
 
 const DEPTH = { understand:"Understand", build:"Build" };
