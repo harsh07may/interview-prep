@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>PrepOps: ASP.NET Core, DSA, and React interview prep</title>
-<meta name="description" content="Interview preparation tracks with answers you can say out loud, written for developers interviewing in India.">
+<title>PrepOps: ASP.NET Core, DSA, React and backend engineering</title>
+<meta name="description" content="Interview preparation tracks with answers you can say out loud, plus a practical backend engineering route. Written for developers interviewing in India.">
 <meta property="og:title" content="PrepOps">
-<meta property="og:description" content="Interview preparation tracks with answers you can say out loud, written for developers interviewing in India.">
+<meta property="og:description" content="Interview preparation tracks with answers you can say out loud, plus a practical backend engineering route. Written for developers interviewing in India.">
 <meta property="og:type" content="website">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎯</text></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -24,6 +24,7 @@
   --t-dsa:#0B6E9F;    --t-dsa-soft:#DCEEF7;
   --t-react:#2D6CB5;  --t-react-soft:#E1ECF8;
   --t-sys:#B5541B;    --t-sys-soft:#FBE9DD;
+  --t-backend:#0F766E; --t-backend-soft:#D7F0ED;
   --on-acc:#FFFFFF;
   --display:"Bricolage Grotesque","Segoe UI",system-ui,sans-serif;
   --body:"Atkinson Hyperlegible","Segoe UI",system-ui,sans-serif;
@@ -36,6 +37,7 @@
     --t-dsa:#6CC4F0;    --t-dsa-soft:#13293A;
     --t-react:#7FB0EE;  --t-react-soft:#172A40;
     --t-sys:#F29A62;    --t-sys-soft:#3A2416;
+    --t-backend:#5ED3C4; --t-backend-soft:#10332F;
     --on-acc:#15131F;
   }
 }
@@ -46,6 +48,7 @@
   --t-dsa:#6CC4F0;    --t-dsa-soft:#13293A;
   --t-react:#7FB0EE;  --t-react-soft:#172A40;
   --t-sys:#F29A62;    --t-sys-soft:#3A2416;
+  --t-backend:#5ED3C4; --t-backend-soft:#10332F;
   --on-acc:#15131F;
 }
 *,*::before,*::after{box-sizing:inherit}
@@ -94,9 +97,10 @@ a{color:inherit}
 
 .track.dsa{--acc:var(--t-dsa);--soft:var(--t-dsa-soft)}
 .track.react{--acc:var(--t-react);--soft:var(--t-react-soft)}
+.track.backend{--acc:var(--t-backend);--soft:var(--t-backend-soft)}
 
 /* Notes */
-.note{grid-column:span 2}
+.note{grid-column:span 3}
 .note h3{font-family:var(--display);font-size:18px;margin:0 0 6px;letter-spacing:-.01em}
 .note p{margin:0;color:var(--muted);font-size:15.5px}
 
@@ -223,6 +227,39 @@ footer{margin-top:28px;color:var(--muted);font-size:14.5px;padding:0 4px}
         </div>
       </div>
     </section>
+    <section class="tile track backend" data-src="backend/" data-kind="depth" aria-labelledby="t-backend">
+      <p class="kicker">Server-side craft</p>
+      <h2 id="t-backend">Backend engineering</h2>
+      <p class="blurb">A learning route, not a question bank: the request path, API design, databases, testing, security, caching, concurrency, messaging, reliability, observability and deployment, ending in one service you build.</p>
+      <ul class="topics">
+        <li><a href="backend/#foundations">Foundations</a></li>
+        <li><a href="backend/#apis">APIs</a></li>
+        <li><a href="backend/#database">Databases</a></li>
+        <li><a href="backend/#testing">Testing</a></li>
+        <li><a href="backend/#security">Security</a></li>
+        <li><a href="backend/#caching">Caching</a></li>
+        <li><a href="backend/#concurrency">Concurrency</a></li>
+        <li><a href="backend/#messaging">Messaging</a></li>
+        <li><a href="backend/#reliability">Reliability</a></li>
+        <li><a href="backend/#observability">Observability</a></li>
+        <li><a href="backend/#deploy">Deployment</a></li>
+        <li><a href="backend/#capstone">Capstone</a></li>
+      </ul>
+      <div class="mix">
+        <div class="mix-bar" role="img" aria-label="Topics by depth: 73 to build, 28 to understand">
+          <span data-level="build" style="background:var(--acc);flex:73"></span>
+          <span data-level="understand" style="background:var(--muted);flex:28"></span>
+        </div>
+        <ul class="mix-legend">
+          <li><i style="background:var(--acc)"></i><b data-count="build">73</b> to build</li>
+          <li><i style="background:var(--muted)"></i><b data-count="understand">28</b> to understand</li>
+        </ul>
+        <div class="cta-row">
+          <a class="cta" href="backend/">Start the route</a>
+          <p class="total"><span data-count="total">101</span> topics across 15 stages</p>
+        </div>
+      </div>
+    </section>
     <section class="tile planned sys">
       <span class="tag">Planned</span>
       <h2>System design</h2>
@@ -250,29 +287,50 @@ footer{margin-top:28px;color:var(--muted);font-size:14.5px;padding:0 4px}
     </div>
     <p class="links"><a class="go" href="https://harsh07may.github.io/build-routes/">Open build routes</a><a href="https://github.com/harsh07may/build-routes">View the repository</a></p>
   </section>
-  <footer>Framework details target .NET 8 and .NET 10. Python examples were tested on Python 3.12. Checked in September 2026.</footer>
+  <footer>Framework details target .NET 8 and .NET 10. Python examples were tested on Python 3.12, Node examples on Node 22, and SQL on PostgreSQL 16. Checked in November 2026.</footer>
 </main>
 
 <script>
-// Refresh the level counts from the live page. If the fetch fails (for example when
-// the file is opened from disk), the static numbers in the markup stay.
+// Refresh each track tile's counts from its live page. If the fetch fails (for
+// example when the file is opened from disk), the static numbers in the markup
+// stay. Each tile declares its kind with data-kind; the table below says how to
+// count that kind and how to describe it.
+const TRACK_KINDS = {
+  level: {
+    keys: ["fresher", "mid", "senior"],
+    pat: (k) => 'level:"' + k + '"',
+    label: (n) => `Questions by level: ${n.fresher} fresher, ${n.mid} mid, ${n.senior} senior`,
+  },
+  difficulty: {
+    keys: ["easy", "med", "hard"],
+    pat: (k) => 'class="diff ' + k + '"',
+    label: (n) => `Problems by difficulty: ${n.easy} easy, ${n.med} medium, ${n.hard} hard`,
+  },
+  depth: {
+    keys: ["build", "understand"],
+    pat: (k) => 'depth:"' + k + '"',
+    label: (n) => `Topics by depth: ${n.build} to build, ${n.understand} to understand`,
+  },
+};
+
 document.querySelectorAll(".track[data-src]").forEach(async (tile) => {
   try {
     const res = await fetch(tile.dataset.src);
     if (!res.ok) return;
     const src = await res.text();
-    const byDifficulty = tile.dataset.kind === "difficulty";
-    const keys = byDifficulty ? ["easy", "med", "hard"] : ["fresher", "mid", "senior"];
-    const count = (k) => (src.match(new RegExp(byDifficulty ? 'class="diff ' + k + '"' : 'level:"' + k + '"', "g")) || []).length;
+    const kind = TRACK_KINDS[tile.dataset.kind || "level"];
+    if (!kind) return;
     const n = {};
-    keys.forEach((k) => { n[k] = count(k); });
-    n.total = keys.reduce((sum, k) => sum + n[k], 0);
+    kind.keys.forEach((k) => {
+      n[k] = (src.match(new RegExp(kind.pat(k), "g")) || []).length;
+    });
+    n.total = kind.keys.reduce((sum, k) => sum + n[k], 0);
     if (!n.total) return;
     tile.querySelectorAll("[data-count]").forEach((el) => { el.textContent = n[el.dataset.count]; });
-    tile.querySelectorAll(".mix-bar [data-level]").forEach((el) => { el.style.flex = String(n[el.dataset.level] || 0); });
-    tile.querySelector(".mix-bar").setAttribute("aria-label", byDifficulty
-      ? `Problems by difficulty: ${n.easy} easy, ${n.med} medium, ${n.hard} hard`
-      : `Questions by level: ${n.fresher} fresher, ${n.mid} mid, ${n.senior} senior`);
+    tile.querySelectorAll(".mix-bar [data-level]").forEach((el) => {
+      el.style.flex = String(n[el.dataset.level] || 0);
+    });
+    tile.querySelector(".mix-bar").setAttribute("aria-label", kind.label(n));
   } catch (e) { /* keep static values */ }
 });
 </script>

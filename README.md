@@ -9,6 +9,7 @@ Interview preparation tracks with answers you can say out loud, the follow-ups t
 | [ASP.NET Core](aspnet-core/) | Fundamentals, C# and OOP, EF Core and SQL, REST APIs, authentication and authorization, performance, caching and security, architecture and testing, and a guide to how interview rounds run | Live, about 180 questions |
 | [DSA patterns](dsa/) | Prerequisites in Python, 25 problem-solving patterns from hashing to bitmask DP, and a mixed set with no pattern labels | Live, 285 problems |
 | [React and TypeScript](react-typescript/) | JavaScript and the event loop, hooks, rendering, state, TypeScript, the browser, HTTP and security, machine coding, frontend system design, and a priority guide for SDE-1 and SDE-2 | Live, 154 questions |
+| [Backend engineering](backend/) | A practical route rather than a question bank: runtime and networking foundations, API design, data modelling, the data layer in production, testing, security, caching and performance, concurrency, messaging, storage and integrations, reliability, observability, deployment, distributed systems, and a capstone service | Live, 101 topics across 15 stages |
 | System design | Designing for scale | Planned |
 
 ## Using the tracks
@@ -30,6 +31,13 @@ Interview preparation tracks with answers you can say out loud, the follow-ups t
 - Key insights stay hidden until you open them. The final mixed set hides the pattern too.
 - All problems are free on LeetCode. Tick problems off as you solve them.
 
+**Backend engineering**
+- A learning route, not interview questions. Fifteen stages in order, each assuming the ones before it, then a capstone.
+- Every topic has the same parts: what it is and why, a concrete case, core concepts, how to build it, the trade-offs, the pitfall people hit, and an exercise.
+- Filter to **Core only** for the spine of the route, or to **Build** and **Understand** to separate what you should be able to implement from what you should know the trade-off for.
+- Tick topics off as you build or can explain them. The capstone composes the exercises into one order service with eight milestones, each with a check you can run.
+- Code is pseudocode unless a snippet is labelled with a language. Real snippets are Node, with C# where a second language helps, plus real SQL, YAML, Dockerfile and nginx config.
+
 Your level filters and solved problems are saved in your browser's `localStorage` and never leave your machine.
 
 ## Structure
@@ -39,6 +47,7 @@ index.html              landing page (bento grid)
 aspnet-core/index.html  ASP.NET Core track
 react-typescript/index.html  React and TypeScript track
 dsa/index.html          DSA patterns track
+backend/index.html      backend engineering route
 ```
 
 Each track is one self-contained HTML file with no build step. Fonts load from Google Fonts.
@@ -46,3 +55,5 @@ Each track is one self-contained HTML file with no build step. Fonts load from G
 ## Accuracy
 
 Framework details target .NET 8 and .NET 10 and were written in September 2026. The DSA sheet's Python was tested on Python 3.12: templates were run, and key insights were checked against brute-force solutions on random inputs. React and TypeScript targets React 19 and TypeScript 5.x. Documentation sites were not reachable while it was written, so only a few React claims are backed by documentation excerpts; every source label says which. Company-specific attributions come from public interview write-ups and are labelled as reported, not verified.
+
+The backend engineering route was written in November 2026. Its SQL was run against PostgreSQL 16 and its JavaScript against Node 22, both inside the authoring container, and the outputs quoted in the snippets are the real ones. Where a snippet could not be run there, the Dockerfile and the Kubernetes manifests among them, the page says so. Each stage's sources section separates pages that were actually retrieved from references that were not.

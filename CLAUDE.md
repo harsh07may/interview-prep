@@ -12,6 +12,7 @@ Interview preparation tracks plus a landing page, served as a static site on Git
 | `aspnet-core/index.html` | ASP.NET Core track, 8 topics, about 180 questions | `aspnet:level:v1` (selected level filter) |
 | `react-typescript/index.html` | React and TypeScript track: 10 topics, 154 questions, same data-driven format as ASP.NET Core | `react:level:v1` (selected level filter) |
 | `dsa/index.html` | DSA patterns track: 7 stages, 25 patterns, 285 problems, Python | `dsa:done:v1` (array of solved problem slugs) |
+| `backend/index.html` | Backend engineering route: 15 stages, 101 topics, plus a capstone spec. A learning route, not a question bank | `backend:done:v1` (ticked topic ids), `backend:filter:v1` (toolbar filter) |
 | `README.md` | Public description | |
 | `.nojekyll` | Tells GitHub Pages to serve files as-is. Do not delete. | |
 
@@ -71,6 +72,83 @@ Content is data, not markup. The script at the bottom of each track declares one
 - Source constants (`EFFECT`, `NOEFFECT`, `COMPILER`, `MEMO`, `USEMEMO`, `SYNC`) point at react.dev pages seen only as documentation excerpts. Use `REPORTED` or `REPORTED_REACT` for widely reported patterns, and do not upgrade a label to "Cited" unless the page was actually retrieved.
 - Output-prediction snippets must be run in Node before publishing. TypeScript snippets in topic 6 were type-checked against TypeScript 5.x.
 
+## How the backend route works
+
+`backend/index.html` is data-driven like the ASP.NET Core page, but it renders a
+different card and is a **learning route rather than a question bank**. It was
+copied from `react-typescript/index.html`, recoloured teal, and had its renderer
+replaced. Keep that distinction when editing: it has no levels, no follow-ups
+and no traps, and adding them would make it a fourth question bank.
+
+### Data shape
+
+One `stages` array. Every stage has `num`, `id`, `phase`, `name`, `intro`, and
+either `topics` or `custom`, plus optional `after` and `sources`.
+
+```js
+{ id:"idempotency",                    // anchor AND progress key: never rename
+  name:"Idempotency and safe retries",
+  depth:"build",                       // "understand" | "build"  (required)
+  core:true,                           // part of the 46-topic spine
+  line:"One line shown on the closed card.",
+  what:`<p>HTML.</p>`,                     // required
+  use:`<p>HTML, one concrete case.</p>`,   // required
+  concepts:[ ["Term","One sentence."] ],   // required, 3 or more pairs
+  how:`<p>HTML.</p>`,                      // required
+  code:[ {label:"Node", lang:"js", code:`raw, unescaped`} ],   // optional array
+  tradeoff:`<p>HTML.</p>`,             // optional
+  pitfall:"Plain text.",               // optional
+  exercise:`<p>HTML.</p>`,             // optional
+  refs:[ ["Label","https://..."] ] }   // optional; an empty array renders nothing
+```
+
+- **Never rename a published `id`.** It is the anchor and the `backend:done:v1`
+  progress key, so renaming silently discards a reader's ticks.
+- `code` entries are inserted with `textContent`, so snippet source is raw.
+  Everything in `what`, `use`, `how`, `tradeoff` and `exercise` is HTML and must
+  escape `<`, `>` and `&`.
+- `core` and `depth` are independent axes. The toolbar filters are All topics,
+  Core only, Build and Understand.
+- The capstone is a `custom` stage with no `topics`, so it renders as prose with
+  no tick boxes and an empty stage-progress line.
+
+### Writing snippets
+
+Three escaping mistakes each cost a rebuild while this page was written, so
+check a stage on its own before inserting it:
+
+1. A shell line continuation (a lone backslash at end of line) inside a JS
+   template literal is an escape and silently joins the two lines. Double it.
+2. A double quote inside a double-quoted string ends it. Use `&quot;` in prose.
+3. A backtick in pseudocode ends the template literal. Remove it.
+
+`langFor()` maps `js`, `cs`, `sql`, `yaml`, `bash` and `json`. Anything else,
+including `dockerfile`, `nginx`, `text` and unlabelled pseudocode, renders
+unhighlighted on purpose: highlight.js 11.9.0's common bundle does not carry the
+first two, and mis-highlighted pseudocode reads worse than none. Keep snippet
+lines to 92 characters, or they scroll sideways on the page.
+
+### Adding a stage
+
+1. Write the stage object as a standalone `{ ... }` literal in its own file.
+2. Syntax-check it alone (`node --check` on `const stage = <literal>;`) before
+   inserting, so a broken stage never reaches the page.
+3. Append it to `stages` before the closing `];`.
+4. Run the checks below, then open the page.
+
+### Content rules specific to this route
+
+- Every claim that can be run should be run, and the snippet should carry its
+  real output. Several topics here were rewritten because testing contradicted
+  the conventional advice: a wrongly ordered index does not stop Postgres using
+  the index, and a current JWT library rejects both `alg:none` and algorithm
+  confusion while happily accepting a token minted for another audience.
+- Where a snippet could not be verified in the authoring environment, the
+  stage's `sources` says so explicitly.
+- Topics that argue against their own subject are deliberate, not hedging:
+  distributed locks, sagas, event sourcing, contract testing and sharding all
+  open by saying when not to use them.
+
 ## How the DSA page works
 
 Unlike the ASP.NET Core page, `dsa/index.html` is plain static markup, not rendered from a data array. Its structure:
@@ -101,7 +179,7 @@ Unlike the ASP.NET Core page, `dsa/index.html` is plain static markup, not rende
 6. On the landing page, turn the planned tile into a live `.track` tile (copy the ASP.NET Core tile, set `data-src`, `--acc` and `--soft` to the track's colour tokens, and update the chips and static counts). Rebalance spans: with two live tracks, give each `grid-column: span 3`.
 7. Add a row to the README table.
 
-Track colours are defined in the landing page: `--t-dotnet`, `--t-dsa`, `--t-react`, `--t-sys`, each with a `-soft` variant, in all three colour blocks.
+Track colours are defined in the landing page: `--t-dotnet`, `--t-dsa`, `--t-react`, `--t-backend`, `--t-sys`, each with a `-soft` variant, in all three colour blocks. The landing page's count script reads each tile's `data-kind` (`level`, `difficulty` or `depth`) from a table, so a new track kind needs a table entry rather than a new branch.
 
 ## Content rules
 
@@ -120,22 +198,53 @@ Track colours are defined in the landing page: `--t-dotnet`, `--t-dsa`, `--t-rea
 
 ```bash
 # 1. HTML parses
-python3 -c "import html.parser; [html.parser.HTMLParser().feed(open(f).read()) for f in ['index.html','aspnet-core/index.html','react-typescript/index.html','dsa/index.html']]; print('html ok')"
+python3 -c "import html.parser; [html.parser.HTMLParser().feed(open(f).read()) for f in ['index.html','aspnet-core/index.html','react-typescript/index.html','dsa/index.html','backend/index.html']]; print('html ok')"
 
 # 1b. No duplicate DSA problem ids (prints nothing when clean)
 grep -o 'data-id="[^"]*"' dsa/index.html | sort | uniq -d
 
-# 2. The track's script has valid syntax (needs Node)
-python3 -c "import re; s=open('aspnet-core/index.html').read(); open('/tmp/track.js','w').write(re.findall(r'<script>(.*?)</script>', s, re.S)[0])" && node --check /tmp/track.js && echo "script ok"
+# 1c. No duplicate backend stage or topic ids (prints nothing when clean)
+grep -o 'id:"[^"]*"' backend/index.html | sort | uniq -d
 
-# 3. No leftover artifact links
-grep -rn "claude.ai/artifact" --include=*.html --include=*.md --exclude=CLAUDE.md . || echo "clean"
+# 2. Every inline script has valid syntax (needs Node)
+for f in aspnet-core react-typescript backend; do
+  python3 -c "import re,sys; s=open('$f/index.html').read(); [open(f'/tmp/chk{i}.js','w').write(b) for i,b in enumerate(re.findall(r'<script>(.*?)</script>', s, re.S))]"
+  for j in /tmp/chk*.js; do node --check "$j" || exit 1; done
+  rm -f /tmp/chk*.js
+done && echo "script ok"
+
+# 2b. Every backend topic has its required fields, and no stub or over-wide snippets
+node -e '
+const fs=require("fs"), s=fs.readFileSync("backend/index.html","utf8");
+const m=s.match(/<script>([\s\S]*?)<\/script>/)[1];
+const lit=m.slice(m.indexOf("const stages"), m.indexOf("const DEPTH"));
+const stages=new Function(lit+"; return stages;")();
+let n=0, bad=[];
+for (const st of stages) for (const t of st.topics||[]) { n++;
+  for (const f of ["id","name","depth","line","what","use","concepts","how"])
+    if (!t[f]) bad.push(t.id+": missing "+f);
+  if (!["understand","build"].includes(t.depth)) bad.push(t.id+": bad depth");
+  if (!t.concepts || t.concepts.length < 3) bad.push(t.id+": needs 3+ concepts");
+  for (const c of t.code||[]) {
+    if (!c.code || c.code.trim().length < 20) bad.push(t.id+": stub snippet");
+    if (c.code.split("\n").some(l => l.length > 92)) bad.push(t.id+": snippet line over 92 chars");
+  }
+}
+console.log("topics:", n);
+if (bad.length) { console.error(bad.join("\n")); process.exit(1); }
+console.log("fields ok");'
+
+# 3. No leftover artifact links.
+#    docs/superpowers/ is excluded because the planning notes in there quote
+#    this very command, so they match themselves.
+grep -rn "claude.ai/artifact" --include=*.html --include=*.md \
+  --exclude=CLAUDE.md --exclude-dir=superpowers . || echo "clean"
 
 # 4. Preview (the landing page's live counts need http, not file://)
 python3 -m http.server 8000
 ```
 
-Then check by eye: every topic renders, the level filter and "Open all answers" work, DSA ticks survive a reload, light and dark mode, and a phone-width window. A runtime error (for example an undefined source constant) leaves the page empty below the toolbar, so always open the page after editing.
+Then check by eye: every topic renders, the level filter and "Open all answers" work, the backend route's four filters work and its ticks and DSA ticks survive a reload, light and dark mode, and a phone-width window. A runtime error (for example an undefined source constant) leaves the page empty below the toolbar, so always open the page after editing.
 
 ## Publishing
 
