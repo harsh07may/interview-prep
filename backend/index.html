@@ -3959,7 +3959,341 @@ If any of those four is missing, the alert is not finished.`} ],
     ],
     sources:`<p>Retrieved while writing: the <a href="https://www.w3.org/TR/trace-context/" target="_blank" rel="noopener">W3C Trace Context</a> recommendation. The header name, the field order, the 2/32/16/2 hex lengths, the example value and the quoted description of the sampled flag all come from it rather than from memory.</p>
       <p>Computed while writing: the latency distribution in the metrics topic. The mean of 54ms against a p99 of 465ms and a p99.9 of 4404ms is the real output over 10,000 samples, as is the tail amplification figure showing that a page making ten such calls has a 9.6% chance of containing at least one slow one.</p>
-      <p>References, not retrieved while writing: the Prometheus histogram guidance and the OpenTelemetry documentation.</p>` }
+      <p>References, not retrieved while writing: the Prometheus histogram guidance and the OpenTelemetry documentation.</p>` },
+
+{ num:14, id:"deploy", phase:5, name:"Deployment and production engineering",
+    intro:"Getting the thing you built onto machines, repeatedly, without dropping requests.",
+    topics:[
+
+      { id:"containerising", name:"Containerising a service properly",
+        depth:"build", core:true,
+        line:"Pin the base, cache the dependency layer, drop root, and make sure signals reach your process.",
+        what:`<p>A container image is your service plus everything it needs to run, which makes a deploy a question of moving one artifact rather than configuring a machine. Most images work; a smaller number are small, cacheable, non-root, and able to shut down cleanly.</p>
+              <p>The last of those is the one that silently breaks deploys, because a service that never receives SIGTERM cannot drain, and everything looks fine until you notice dropped requests on every release.</p>`,
+        use:`<p>Builds take nine minutes because the dependency install runs on every commit: the Dockerfile copies the whole source tree before installing, so any source change invalidates the dependency layer. Copying the manifest first and installing before the source takes the common case to forty seconds.</p>`,
+        concepts:[
+          ["Layer caching","Each instruction is a layer, invalidated by any change at or above it. Order from least to most frequently changing: that ordering is the whole build-time optimisation."],
+          ["Multi-stage","Build in one stage with the full toolchain, copy only the artifact into a small runtime stage. Smaller image, and your compilers are not in production."],
+          ["Pin the base","<code>node:22</code> moves. Pin to a digest or at least a patch version, or your build is not reproducible and a base change can break you with no commit."],
+          ["Non-root","Run as an unprivileged user. If something escapes the process, it should not also be root inside the container."],
+          ["Signals and PID 1","Use the exec form so your process is PID 1 and receives SIGTERM. A shell wrapper takes the signal and does not pass it on."]
+        ],
+        how:`<p>Order the Dockerfile by change frequency, use a multi-stage build, and use the JSON array form of <code>ENTRYPOINT</code>, which runs your binary directly rather than through a shell. That last detail is worth proving to yourself once.</p>`,
+        code:[ {label:"The signal trap, demonstrated without Docker", lang:"bash", code:`# exec form: the app replaces the shell, so it IS the process.
+sh -c 'exec node app.js' &
+kill -TERM $!
+#   app: started, pid 5086
+#   app: SIGTERM received, draining        <- clean shutdown
+
+# shell form: a shell starts the app as a child.
+sh -c 'node app.js' &
+kill -TERM $!
+#   app: started, pid 5097
+#   [1]+ Terminated   sh -c 'node app.js'
+#   app is STILL RUNNING: the shell took the signal and never
+#   forwarded it
+
+# In a container the second case means your drain never runs. The
+# orchestrator waits out the grace period, then sends SIGKILL, and
+# every in-flight request is dropped on every single deploy.`},
+               {label:"A Dockerfile ordered by change frequency", lang:"dockerfile", code:`# syntax=docker/dockerfile:1
+
+FROM node:22.11.0-bookworm-slim AS build
+WORKDIR /app
+COPY package.json package-lock.json ./     # changes rarely
+RUN npm ci                                  # cached unless the lockfile moves
+COPY . .                                    # changes every commit
+RUN npm run build
+
+FROM node:22.11.0-bookworm-slim AS runtime
+ENV NODE_ENV=production
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+COPY --from=build /app/dist ./dist          # the artifact only
+
+USER node                                   # not root
+EXPOSE 8080
+ENTRYPOINT ["node", "dist/server.js"]       # exec form: signals arrive
+
+# Not validated in this container: there is a Docker client here but
+# no daemon, so this was not built. Treat it as a worked example to
+# adapt, and check your own base image's tag and user name.`} ],
+        tradeoff:`<p>A minimal base such as distroless or Alpine gives a smaller image and a smaller attack surface, and takes away the shell you wanted during an incident, plus, for Alpine, a different C library that occasionally breaks native modules in ways that are tedious to diagnose. A slim Debian base is bigger and boring, which is usually the right trade for an application service. Go minimal for something with a static binary and no debugging story to lose.</p>`,
+        pitfall:"Using the shell form of ENTRYPOINT or CMD. It works, it starts the service, and it quietly disables graceful shutdown, so the symptom is a handful of failed requests during each deploy rather than anything that looks like a container problem.",
+        exercise:`<p>Run the two shell snippets above and watch the difference. Then look at your own image: check the base is pinned, the dependency install happens before the source copy, the final stage has no build tools, it runs as a non-root user, and the entrypoint is the array form. Then time a rebuild after a one-line source change.</p>`,
+        refs:[ ["Docker: Dockerfile best practices","https://docs.docker.com/build/building/best-practices/"] ] },
+
+      { id:"pipeline", name:"Pipeline: build once, promote the artifact",
+        depth:"build", core:true,
+        line:"Build one artifact, test that artifact, deploy that artifact. Never rebuild per environment.",
+        what:`<p>A pipeline turns a commit into a running service. The property that makes it trustworthy is that the thing tested is bit-for-bit the thing deployed. Rebuilding per environment breaks that: the staging image and the production image are built at different times, from different caches, with potentially different transitive dependencies.</p>
+              <p>What differs between environments is configuration, injected at deploy time, never baked into the image.</p>`,
+        use:`<p>Staging passes, production fails on startup. The images were built separately an hour apart, and a transitive dependency published a patch release in between. The commit is identical and the artifacts are not, so the test result said nothing about what shipped.</p>`,
+        concepts:[
+          ["Build once","One build per commit, producing an immutable artifact identified by its digest. Everything downstream refers to that digest."],
+          ["Promote, do not rebuild","Deploying to production means pointing production at the digest that passed. No rebuild, no retag of a moving tag."],
+          ["Configuration at deploy","The same image reads different environment variables and secrets per environment, as the configuration topic describes."],
+          ["Fast feedback first","Order stages by how quickly they fail: lint, unit, build, integration, deploy. A ten-minute suite that could have failed in ten seconds wastes the time every run."],
+          ["Environment parity","Staging should differ from production in scale and data, not in shape. Different managed services or different runtime versions make staging's result meaningless."]
+        ],
+        how:`<p>Make the artifact's digest the thing that moves through the pipeline, and have every deploy reference it explicitly. Avoid mutable tags such as <code>latest</code> for anything but convenience, because a tag that can point somewhere new makes "which version is running" unanswerable.</p>
+              <p>Then keep secrets out of build logs and out of the image. A build argument is visible in the image history, which is a common way a token ends up in a registry.</p>`,
+        code:[ {label:"One artifact, promoted by digest", lang:"yaml", code:`# 1. Build once. The digest is the identity from here on.
+build:
+  run: |
+    docker build -t "$REGISTRY/orders:$GIT_SHA" .
+    docker push "$REGISTRY/orders:$GIT_SHA"
+    DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' \\
+             "$REGISTRY/orders:$GIT_SHA")
+    echo "$DIGEST" > artifact.txt          # passed to every later stage
+
+# 2. Test THAT artifact, not a fresh build of the same commit.
+test:
+  needs: build
+  run: docker run --rm "$(cat artifact.txt)" npm run test:integration
+
+# 3. Deploy the same digest. Staging and production differ only in
+#    which configuration and secrets are injected.
+deploy-staging:
+  needs: test
+  run: deploy --image "$(cat artifact.txt)" --env staging
+
+deploy-production:
+  needs: deploy-staging
+  when: manual
+  run: deploy --image "$(cat artifact.txt)" --env production
+
+# Order by speed of failure: lint and unit tests take seconds and
+# should run before a build that takes minutes.`} ],
+        tradeoff:`<p>Deploying automatically on every green build gives the shortest path from commit to production and the smallest changes, which are the easiest to debug, and it requires genuine confidence in the suite and a fast rollback. A manual gate is reassuring and encourages batching, so changes arrive in larger, riskier groups and the gate becomes a rubber stamp. The honest middle is automatic to staging, one click to production, with the click being quick enough that nobody waits to batch things up.</p>`,
+        pitfall:"Deploying a mutable tag such as latest or main. Two instances started minutes apart can run different code, a rollback has nothing specific to roll back to, and the question of what is running in production has no reliable answer.",
+        exercise:`<p>Trace one commit through your pipeline and check whether the artifact deployed to production is the one that was tested, by comparing digests. Then try to answer, from your deployment system alone, exactly which commit is running right now. If either answer needs guesswork, that is the gap.</p>`,
+        refs:[] },
+
+      { id:"release-strategies", name:"Release strategies and feature flags",
+        depth:"build", core:false,
+        line:"How fast can you undo it? That question decides the strategy.",
+        what:`<p>Deploying new code to every instance at once means any problem affects everyone immediately. The alternatives differ in how much exposure a bad release gets and how quickly it can be withdrawn, and they cost money, complexity, or both.</p>
+              <p>Separately, feature flags decouple deploying code from enabling behaviour, which is a different axis and often more useful than the deployment strategy itself.</p>`,
+        use:`<p>A release introduces a subtle bug affecting 2% of orders. With a rolling deploy it reaches everyone over ten minutes and the rollback takes another ten, so twenty minutes of orders are affected. Behind a flag at 5%, the same bug affects a twentieth of that traffic and is switched off in seconds, with no deploy at all.</p>`,
+        concepts:[
+          ["Rolling","Replace instances in batches. No extra infrastructure, and two versions run simultaneously, so every change must be compatible with its predecessor."],
+          ["Blue-green","Two full environments, traffic switched between them. Instant rollback, and double the infrastructure during the switch."],
+          ["Canary","A small share of traffic to the new version, watched, then widened. The best risk-to-cost ratio, and it needs per-version metrics to be meaningful."],
+          ["Feature flags","Ship the code disabled, enable it separately, by percentage or cohort. Rollback becomes a configuration change measured in seconds."],
+          ["Flag debt","A flag with no removal date becomes permanent branching. Every combination of long-lived flags is a code path that is never tested together."]
+        ],
+        how:`<p>Default to rolling with a canary step, because it costs nothing extra and catches most problems at a fraction of the exposure. Use flags for anything risky or anything you want to enable gradually, and give every flag an owner and a removal date when you create it.</p>
+              <p>A canary only works if you can compare: the new version needs its own error rate and latency, which means the version must be a label on your metrics.</p>`,
+        code:[ {label:"Comparing the four", lang:"text", code:`              rollback speed   extra cost   two versions at once
+rolling       one more deploy  none         yes, always
+blue-green    seconds          2x infra     briefly, during the switch
+canary        seconds          small        yes, deliberately
+feature flag  seconds          none         same code, both paths
+
+Rolling and canary both run two versions at once, which means every
+release must be compatible with the one before it: additive API
+changes, expand-and-contract migrations, and events the old version
+can still read.
+
+A canary needs this to be worth anything:
+  error rate and latency labelled BY VERSION
+  an automatic rollback rule, e.g. error rate 2x the baseline
+  long enough to be meaningful: 5 minutes of traffic, not 30 requests
+
+Every flag gets an owner and a removal date on the day it is created,
+or the codebase accumulates branches nobody is willing to delete.`} ],
+        tradeoff:`<p>Blue-green gives the cleanest rollback and pays for a second environment, and it does not help with the database, which is shared by both colours and still needs backwards-compatible migrations. Canary gives most of the safety for a fraction of the cost and needs per-version observability to be anything other than a slower rollout. Flags give the fastest rollback of all and move the complexity into the code, where it stays until someone removes it. Most teams get the best return from rolling plus canary plus a disciplined flag lifecycle, and never need blue-green.</p>`,
+        pitfall:"Treating a canary as a waiting period rather than a comparison. Watching the canary for five minutes without per-version metrics tells you only that it started, which is the one thing a rolling deploy would also have told you.",
+        exercise:`<p>Add a version label to your metrics and check you can plot error rate for two versions side by side. Then do one canary release and write down the rule you would have used to abort it. Finally, list your feature flags with their creation dates: anything over three months old is debt, and the oldest is probably load-bearing.</p>`,
+        refs:[] },
+
+      { id:"kubernetes-objects", name:"The Kubernetes objects you actually touch",
+        depth:"understand", core:false,
+        line:"Six objects and three settings cover almost everything a service owner needs.",
+        what:`<p>Kubernetes is large and most of it is not your problem. As the owner of one service you interact with a small set of objects, and the failures you will hit come from three settings rather than from the platform's depth.</p>
+              <p>This is deliberately scoped to operating your own service. It is not a Kubernetes course, and if your platform team owns the cluster, this is the boundary.</p>`,
+        use:`<p>A deploy appears to succeed and the service is unreachable. The Deployment rolled out, the pods are running, and the Service selector does not match the pod labels, so it has no endpoints. Three commands find it, and none of them require understanding the scheduler.</p>`,
+        concepts:[
+          ["Deployment","Declares how many replicas of which image, and manages replacing them. The object you edit to deploy."],
+          ["Service","A stable name and address in front of pods selected by label. Also the service discovery mechanism: other services call it by name."],
+          ["Ingress or Gateway","Routes outside traffic to a Service, usually terminating TLS. The edge from the networking stage, in cluster form."],
+          ["ConfigMap and Secret","Configuration and secrets mounted or injected as environment variables. A Secret is base64, not encrypted, unless the cluster is configured for it."],
+          ["Probes and grace period","The probes from the reliability stage, plus <code>terminationGracePeriodSeconds</code>, which must exceed your drain deadline."]
+        ],
+        how:`<p>Learn the three things that break: the Service selector must match the pod labels or there are no endpoints; readiness must be honest or traffic goes to pods that cannot serve it; and resource limits decide whether you are throttled or killed, which the next topic covers.</p>
+              <p>Then learn four commands, which diagnose most of it: describe the pod for events, get endpoints to confirm the Service found anything, logs with previous for a crash loop, and get events sorted by time.</p>`,
+        code:[ {label:"A Deployment with the parts that matter", lang:"yaml", code:`apiVersion: apps/v1
+kind: Deployment
+metadata: { name: orders }
+spec:
+  replicas: 3
+  selector:
+    matchLabels: { app: orders }        # MUST match the template labels
+  template:
+    metadata:
+      labels: { app: orders }           # and the Service's selector
+    spec:
+      terminationGracePeriodSeconds: 30 # longer than your drain deadline
+      containers:
+        - name: orders
+          image: registry/orders@sha256:...   # a digest, not a tag
+          ports: [{ containerPort: 8080 }]
+          envFrom:
+            - configMapRef: { name: orders-config }
+            - secretRef:    { name: orders-secrets }
+          readinessProbe:
+            httpGet: { path: /readyz, port: 8080 }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /livez, port: 8080 }   # NOT /readyz
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }  # what you are scheduled on
+            limits:   { memory: 512Mi }             # exceed it and you are killed`},
+               {label:"The four commands that find most problems", lang:"bash", code:`kubectl describe pod <pod>          # events at the bottom: the real reason
+kubectl get endpoints <service>     # empty means the selector matches nothing
+kubectl logs <pod> --previous       # the crashed container, not the new one
+kubectl get events --sort-by=.lastTimestamp
+
+# Not run here: there is no cluster in this container. These are the
+# commands to reach for, in this order, when a deploy looks fine and
+# the service is unreachable.`} ],
+        tradeoff:`<p>Kubernetes gives you rollouts, health management, service discovery, autoscaling and secret handling in one place, and it is a substantial operational system of its own. For one service with steady traffic, a managed container platform or even a virtual machine with a process manager is less to run and less to know. The cluster starts paying for itself at a number of services and a rate of change where doing all that by hand is worse, and that threshold is higher than enthusiasm suggests.</p>`,
+        pitfall:"Pointing the liveness probe at the readiness endpoint. It is one character of configuration and it means a dependency blip restarts every pod simultaneously, which is the failure the reliability stage describes.",
+        exercise:`<p>Take a Deployment you own and check four things: the image is a digest rather than a tag, the grace period exceeds your drain deadline, liveness and readiness point at different endpoints, and a memory limit is set. Then deliberately break the Service selector and practise finding it with <code>get endpoints</code>.</p>`,
+        refs:[ ["Kubernetes: Deployments","https://kubernetes.io/docs/concepts/workloads/controllers/deployment/"] ] },
+
+      { id:"limits-autoscaling", name:"Resource limits, autoscaling and OOMKills",
+        depth:"build", core:false,
+        line:"A CPU limit throttles you silently; a memory limit kills you without a stack trace.",
+        what:`<p>Requests and limits look like a pair and behave completely differently. Requests decide where your service is scheduled and what it is guaranteed. Limits decide what happens when it exceeds them, and the consequence depends entirely on which resource: CPU is throttled, memory is fatal.</p>`,
+        use:`<p>A service restarts a few times a day with exit code 137 and nothing in the logs. The memory limit is 512Mi, the heap grows past it under load, and the kernel kills the process instantly. There is no exception, no shutdown hook and no final log line, because an OOMKill is not something a process can handle.</p>`,
+        concepts:[
+          ["Request versus limit","The request is what you are guaranteed and scheduled against; the limit is the ceiling. Requests too low means being scheduled onto a crowded node."],
+          ["CPU throttling","Exceeding a CPU limit does not fail, it slows down in small slices. The symptom is latency with no error, and it is invisible unless you watch the throttling metric."],
+          ["OOMKill","Exceeding a memory limit is immediate termination by the kernel. Exit code 137, no stack trace, nothing in your logs."],
+          ["Heap versus limit","Your runtime's heap limit must be below the container's memory limit, with room for stacks, buffers and native allocations, or the runtime will happily grow into being killed."],
+          ["Scaling on the right signal","Scale on something that correlates with load. CPU works for CPU-bound services and not for I/O-bound ones, where queue depth or in-flight requests is the better signal."]
+        ],
+        how:`<p>Set requests from observed usage, and a memory limit with headroom above the peak you measured. Configure the runtime's own heap ceiling below the container limit, because a runtime that does not know about the limit will use the host's memory as its reference.</p>
+              <p>Then check that scaling can actually help. If the bottleneck is a connection pool or a downstream service, adding replicas multiplies the pressure on it and makes things worse, which the database pooling topic covers.</p>`,
+        code:[ {label:"What each limit does when you cross it", lang:"text", code:`CPU limit exceeded     -> throttled. Latency rises, nothing errors, and
+                          the only evidence is the throttling metric.
+                          Many teams are better off with no CPU limit
+                          and a correct request.
+
+Memory limit exceeded  -> OOMKilled. Exit code 137, instant, no stack
+                          trace, no shutdown hook, nothing in the log.
+                          Always set this one: without it a leak takes
+                          down the whole node instead of one pod.
+
+Make the runtime aware of the limit, or it will grow into being killed:
+  Node     --max-old-space-size=384        (limit 512Mi)
+  JVM      -XX:MaxRAMPercentage=75
+  .NET     DOTNET_GCHeapHardLimitPercent
+
+Headroom is for stacks, buffers, native allocations and the runtime
+itself, not just the heap.
+
+Autoscaling only helps if the bottleneck scales with replicas:
+  CPU-bound work            -> scale on CPU, works well
+  I/O-bound, waiting a lot  -> scale on in-flight requests or queue depth
+  bottleneck is the DB pool -> scaling makes it WORSE: more instances,
+                               more connections, same database`} ],
+        tradeoff:`<p>A tight memory limit catches a leak early, protects the node from one bad pod, and turns a temporary spike into a restart. A generous one survives spikes and lets a real leak run for longer before anyone notices. Set it from the measured peak with headroom, and treat frequent OOMKills as a signal to investigate rather than as a number to raise. CPU is the opposite case: the limit buys much less than people expect and throttles you invisibly, so getting the request right matters more than setting a ceiling.</p>`,
+        pitfall:"Raising the memory limit to stop the restarts. It converts a restart every hour into a restart every six hours and leaves the leak in place, while making each eventual failure more disruptive because more state is lost.",
+        exercise:`<p>Find your service's memory limit and its runtime heap setting. If the heap ceiling is not comfortably below the container limit, you are configured to be OOMKilled. Then check your CPU throttling metric under load: most teams have never looked at it, and a surprising number are throttled.</p>`,
+        refs:[ ["Kubernetes: resource requests and limits","https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/"] ] },
+
+      { id:"iac", name:"Infrastructure as code",
+        depth:"understand", core:false,
+        line:"Declare the desired state, see the plan, apply it. The state file is the part that bites.",
+        what:`<p>Infrastructure created by clicking in a console cannot be reviewed, reproduced or recreated after an accident, and nobody remembers why it is the way it is. Infrastructure as code makes it a file in version control, with a diff and a reviewer.</p>
+              <p>You do not need to be an expert to benefit. You need the four concepts that explain what goes wrong.</p>`,
+        use:`<p>A production database needs recreating in another region for disaster recovery. It was created by hand three years ago, and nobody knows its parameter group, its backup retention, or which security groups reference it. Recreating it accurately takes days of archaeology, and the copy is subtly different in ways discovered later.</p>`,
+        concepts:[
+          ["Declarative","You describe the desired end state and the tool works out the steps. Running it twice changes nothing the second time, which is what makes it safe to re-run."],
+          ["Plan before apply","The tool shows what it will create, change and destroy. Reading that plan is the review, and <em>destroy</em> on anything stateful is the line to stop at."],
+          ["State","A record of what the tool believes exists, mapping your code to real resources. Lose it and the tool will try to create everything again; share it carelessly and two people can corrupt it."],
+          ["Drift","Someone changed something by hand, so reality no longer matches the state. The next apply will try to change it back, possibly during an incident."],
+          ["Modules","Reusable units with inputs. The same way you avoid copying a hundred lines of configuration per environment."]
+        ],
+        how:`<p>Put the state in shared remote storage with locking, so two applies cannot run at once, and never in the repository. Require a plan in the pull request so the reviewer sees the effect rather than the intent. Then keep the environments as the same code with different inputs, which is what makes staging a real rehearsal.</p>`,
+        code:[ {label:"The plan is the review", lang:"bash", code:`terraform plan -out=tf.plan
+
+#   + create     a new resource
+#   ~ update     changed in place, usually fine
+#   -/+ replace  DESTROYED and recreated. On a database, read this twice.
+#   -  destroy   removed
+
+# The line that matters in a plan on anything stateful:
+#   aws_db_instance.orders must be replaced
+#   -/+ resource "aws_db_instance" "orders" {
+#         ~ engine_version = "15.4" -> "16.1"   # forces replacement
+#
+# "forces replacement" on a database means destroy and recreate, which
+# means the data is gone. This is the single most important phrase to
+# recognise in a plan.
+
+terraform apply tf.plan      # apply exactly what was reviewed,
+                             # not a freshly computed plan`} ],
+        tradeoff:`<p>Managing everything as code gives reproducibility and review, and makes small changes slower: a security group rule becomes a pull request. Managing nothing as code is fast until you need to recreate something or explain how it got that way. The split most teams land on is that anything stateful, networked or security-relevant is code, while genuinely disposable experiments are not. The failure mode to avoid is the half-managed estate, where it is unclear whether a given resource is owned by the tool, and an apply deletes something a person created.</p>`,
+        pitfall:"Keeping state in local files or committing it to the repository. It contains resource identifiers and often secrets, two people applying concurrently will corrupt it, and losing it means the tool no longer knows that your production database belongs to it.",
+        exercise:`<p>Pick one resource in your infrastructure that was created by hand and import it into your tool, then run a plan and read the diff between the code and reality. That diff is the undocumented configuration nobody could have reproduced. Then check where your state lives and whether it is locked.</p>`,
+        refs:[] },
+
+      { id:"cloud-iam", name:"Cloud primitives and least-privilege IAM",
+        depth:"understand", core:false,
+        line:"Identity attached to the workload, not a key in a file, and the smallest permission that works.",
+        what:`<p>Cloud providers have hundreds of services and you need very few of them. What you do need, on every project, is to understand identity and network boundaries, because that is where the serious mistakes are: an over-permissioned role or an open security group turns a small bug into a full compromise.</p>`,
+        use:`<p>A service needs to read one bucket. It is given a broad storage-administrator role because that made the error go away on a Friday. A dependency vulnerability later gives an attacker code execution in that service, and with it the ability to read and delete every bucket in the account, including the backups.</p>`,
+        concepts:[
+          ["Workload identity","A role attached to the running workload, with short-lived credentials issued automatically. No key to leak, rotate or commit."],
+          ["Least privilege","Specific actions on specific resources. Not a wildcard action, and not a wildcard resource; a role should be boring to read."],
+          ["Deny by default","Nothing is permitted unless granted. Then an over-broad grant is a visible line in a policy rather than an absence nobody notices."],
+          ["Network boundaries","Security groups and subnets decide what can reach what. A database reachable from the public internet is a configuration away from being a breach."],
+          ["Managed versus self-hosted","A managed database costs more and removes patching, backups, failover and much of the operational burden. Usually the right trade for a small team."]
+        ],
+        how:`<p>Use workload identity everywhere it is available, so there is no static key in your configuration at all. Write policies that name the actions and the resources, start from nothing and add what fails, and review them when the service changes.</p>
+              <p>Then check the network separately: a correct policy does not help if the database accepts connections from anywhere, and the two are configured in different places by different people.</p>`,
+        code:[ {label:"The same permission, two ways", lang:"json", code:`// What gets written on a Friday afternoon:
+{ "Effect": "Allow",
+  "Action": "s3:*",
+  "Resource": "*" }
+// Every action, every bucket, including delete and including the
+// backups bucket. A code execution bug in this service is now an
+// account-wide data loss event.
+
+// What the service actually needs:
+{ "Effect": "Allow",
+  "Action": ["s3:GetObject", "s3:PutObject"],
+  "Resource": "arn:aws:s3:::acme-uploads/orders/*" }
+// Two actions, one prefix, one bucket. No delete, no list, nothing
+// outside that path.
+
+// Start from nothing, run the service, add what fails. It takes an
+// afternoon once, and the result is a policy you can read and defend.`} ],
+        tradeoff:`<p>Narrow policies are safer and need maintenance: a new feature that writes a new prefix fails until someone updates the policy, which is friction at exactly the wrong moment. Broad policies never block anyone and make every compromise maximal. The usual resolution is narrow in production and permissive in a development account that holds nothing real, plus making the permission change part of the feature's pull request rather than a separate request to another team, which is what makes people reach for the wildcard.</p>`,
+        pitfall:"Static access keys in environment variables or configuration files. They do not expire, they get committed, they get copied to laptops, and when one leaks you often cannot tell which copy it was or what used it.",
+        exercise:`<p>Take one service's role and list its permissions. For each, check whether the service actually uses it; anything with a wildcard is the place to start. Then check whether your database accepts connections from outside your private network, and whether any static cloud credential exists in your configuration at all.</p>`,
+        refs:[] }
+
+    ],
+    after:[
+      ["Build an image that shuts down","Pinned base, cached layers, non-root, exec-form entrypoint that receives SIGTERM."],
+      ["Deploy what you tested","One artifact promoted by digest, configuration injected per environment."],
+      ["Release with a way back","Rolling plus canary, per-version metrics, and flags with removal dates."],
+      ["Operate your own workload","The six objects, the selector trap, and the four commands that diagnose most of it."],
+      ["Set limits that mean something","Runtime heap below the container limit, and scaling on a signal that correlates with load."],
+      ["Reproduce your infrastructure","Code with remote locked state, and a plan that is read before it is applied."],
+      ["Grant the smallest permission","Workload identity, named actions on named resources, and no static keys."]
+    ],
+    sources:`<p>Verified by running, in this container: the PID 1 signal demonstration. With <code>exec</code> the process receives SIGTERM and drains; without it the shell is terminated and the application keeps running, which in a container means the drain never happens and the orchestrator force-kills it after the grace period.</p>
+      <p>Not validated here, and labelled as such in the page: the Dockerfile, the Kubernetes manifests and the <code>kubectl</code> commands. This container has a Docker client with no daemon and no cluster, so these are worked examples to adapt rather than files that were built and applied.</p>
+      <p>References, not retrieved while writing: the Docker best practices page and the Kubernetes documentation on Deployments and on resource management.</p>` }
 ];
 
 const DEPTH = { understand:"Understand", build:"Build" };
