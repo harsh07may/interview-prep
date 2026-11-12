@@ -96,7 +96,6 @@ code{font-family:var(--mono);font-size:.86em;background:var(--accent-soft);color
 .lvl.build{background:var(--senior-bg);color:var(--senior)}
 .lvl.understand{background:var(--accent-soft);color:var(--accent-ink)}
 .lvl.core{background:var(--mid-bg);color:var(--mid)}
-@media (max-width:560px){.t-meta{flex-wrap:wrap;justify-content:flex-end}}
 
 /* Stage headings */
 .phase-title{font-family:var(--display);font-size:1rem;color:var(--accent-ink);margin:0;font-weight:500}
@@ -153,6 +152,13 @@ figure.snip figcaption{font-size:.8rem;font-weight:700;color:var(--muted);margin
 figure.snip pre{margin:0}
 .label{font-weight:700}
 .overall-progress{font-size:.9rem;color:var(--muted)}
+@media (max-width:560px){
+  details.topic-card > summary{grid-template-columns:1fr;gap:7px}
+  .t-name{grid-column:1;grid-row:1}
+  .t-line{grid-column:1;grid-row:2}
+  .t-meta{grid-column:1;grid-row:3;flex-wrap:wrap;justify-content:flex-start}
+  .t-meta .chev{margin-left:auto}
+}
 pre{background:var(--code-bg);color:var(--code-ink);font-family:var(--mono);font-size:.84rem;line-height:1.55;padding:16px 18px;border-radius:12px;overflow-x:auto;margin:14px 0 0}
 pre code{background:none;color:inherit;padding:0;font-size:inherit}
 /* Syntax highlighting (highlight.js tokens; code blocks are dark in both themes) */
@@ -309,13 +315,256 @@ total    %{time_total}s
         tradeoff:`<p>Read the numbers as differences, not absolutes. <code>connect</code> minus <code>dns</code> is the TCP handshake, <code>tls</code> minus <code>connect</code> is the TLS handshake, and <code>first</code> minus <code>sent</code> is the server actually working. If <code>first</code> is close to <code>total</code>, the server is slow to start responding; if <code>total</code> is much larger, the response body is slow to transfer, which is a different problem with a different fix.</p>`,
         pitfall:"Treating a slow response as an application problem before splitting the timing. A handshake that costs 300ms on every call, because connections are not being reused, is invisible in application metrics and obvious in these six numbers.",
         exercise:`<p>Run the command above against one endpoint of a service you work on, from a machine outside its network. Write down the six numbers. Then run it twice in a row over a reused connection and note which numbers collapse to near zero. Keep the figures: the caching and performance stage asks you to compare against them.</p>`,
-        refs:[ ["curl manual: the --write-out variables","https://curl.se/docs/manpage.html"] ] }
+        refs:[ ["curl manual: the --write-out variables","https://curl.se/docs/manpage.html"] ] },
+
+      { id:"http-semantics", name:"HTTP semantics: methods, status codes and headers",
+        depth:"build", core:true,
+        line:"Methods, status codes and headers are a contract that clients, proxies and caches act on.",
+        what:`<p>HTTP is not just an envelope. Clients branch on the status code, proxies and caches change behaviour based on it, and retry logic depends on whether a method is safe to repeat. Getting the semantics right costs nothing at the time and saves a class of bug that is expensive to find later.</p>
+              <p>RFC 9110 defines <strong>safe</strong> methods as GET, HEAD, OPTIONS and TRACE: they are not expected to change state. It defines <strong>idempotent</strong> methods as PUT and DELETE plus all the safe ones: repeating them has the same effect as doing them once. POST is neither.</p>`,
+        use:`<p>A mobile client loses its connection mid-request and retries. If creating an order is a POST with nothing else, the retry creates a second order and charges twice. If your "not found" response is a 200 with <code>{"error": "..."}</code> in the body, the client's error branch never runs, the user sees an empty screen instead of a message, and a cache is entitled to store that response as a perfectly good one.</p>`,
+        concepts:[
+          ["Safe","GET, HEAD, OPTIONS, TRACE. A crawler, a prefetcher or a browser may call these without asking. Never change state in a GET."],
+          ["Idempotent","PUT and DELETE, plus the safe methods. A client or proxy may repeat them after a timeout. POST is not idempotent, which is why creation needs an idempotency key."],
+          ["Status class","2xx the request worked, 3xx go elsewhere, 4xx the client must change something, 5xx the server failed and the client may retry. The class alone drives most client logic."],
+          ["Allow","RFC 9110 requires a 405 response to carry an <code>Allow</code> header listing the methods the resource does support. Most frameworks will do this for you if you let them."],
+          ["Negotiation and Vary","<code>Accept</code>, <code>Accept-Language</code> and <code>Accept-Encoding</code> state what the client wants. If a response differs by any of them, it must say so in <code>Vary</code>, or a shared cache will serve the wrong variant to the next person."]
+        ],
+        how:`<p>Pick the method from the semantics, not from habit: GET to read, POST to create or to run something that is not idempotent, PUT to replace a whole resource at a known identifier, PATCH for a partial change, DELETE to remove. If an action does not map to any of them, POST to a resource that names the action is the honest answer.</p>
+              <p>Then pick the status code deliberately. The distinctions that matter in practice:</p>
+              <ul>
+                <li><strong>400 versus 422.</strong> 400 is malformed: unparseable JSON, a broken framing. 422 is well-formed but wrong: the body parsed, the types are right, and the values still cannot be accepted.</li>
+                <li><strong>401 versus 403.</strong> 401 means the request lacked valid credentials, so authenticating may help. 403 means the server understood and refuses, so retrying with the same identity will not.</li>
+                <li><strong>403 versus 404.</strong> Returning 404 for a resource the caller may not see hides its existence. That is a deliberate trade: it is better for multi-tenant data, worse for debugging.</li>
+                <li><strong>409.</strong> The request conflicts with current state: a duplicate unique value, a version that has moved on. Use it instead of a 400 so the client can distinguish "fix your input" from "re-read and try again".</li>
+                <li><strong>429.</strong> Too many requests. Defined in RFC 6585 rather than RFC 9110, and it should carry <code>Retry-After</code>. Covered in the rate limiting topic.</li>
+              </ul>`,
+        code:[ {label:"Well-formed, still refused", lang:"text", code:`POST /orders HTTP/1.1
+Content-Type: application/json
+Idempotency-Key: 01J9F0G7Q0X2
+
+{"sku": "A-12", "qty": 0}
+
+HTTP/1.1 422 Unprocessable Content
+Content-Type: application/problem+json
+
+{"type": "/problems/invalid-quantity",
+ "title": "Quantity must be at least 1",
+ "status": 422,
+ "code": "INVALID_QUANTITY",
+ "field": "qty"}`} ],
+        tradeoff:`<p>Resist inventing codes or overloading 400 for everything. A client that can only distinguish "something was wrong" has to show the user a generic message and cannot decide whether to retry. On the other hand, do not reach for obscure codes to be precise: if a caller will treat 422 and 409 identically, the extra precision buys nothing and the stable error code in the body is doing the real work. That body format is the next topic in the API stage.</p>`,
+        pitfall:"Returning 200 with an error in the body. Every client's error handling stops working, retry logic cannot tell success from failure, and a shared cache is free to store the error and serve it to someone else.",
+        exercise:`<p>Take one existing API you work on and list every endpoint with its method and the status codes it can return. Find the three worst entries: a GET that changes something, a 200 carrying an error, and a 400 that should be 404, 409 or 422. Fix one of them and note what you would have to tell client authors before you could ship the other two.</p>`,
+        refs:[ ["RFC 9110: HTTP Semantics","https://www.rfc-editor.org/rfc/rfc9110.html"], ["RFC 6585: Additional HTTP Status Codes","https://www.rfc-editor.org/rfc/rfc6585.html"] ] },
+
+      { id:"concurrency-models", name:"Server concurrency models and what one request costs",
+        depth:"understand", core:false,
+        line:"Thread per request, event loop, or worker pool, and how many in-flight requests each can hold.",
+        what:`<p>Every server has to answer the same question: when a request is waiting on a database, what happens to the other requests? The three common answers are a thread per request, a single event loop, and a pool of worker processes. They differ in what one in-flight request costs and therefore in how many you can hold at once.</p>
+              <p>This topic is about the shape of the server. How to write async code without starving it is in the concurrency and async work stage.</p>`,
+        use:`<p>Your service handles 200 requests a second comfortably and falls over at 400, while CPU sits at 30%. The model tells you where to look: with a thread per request you are probably out of threads or memory; on an event loop something is blocking it; with a worker pool you have run out of workers. In none of those cases does a bigger machine help much.</p>`,
+        concepts:[
+          ["Thread per request","Each request gets a thread, which simply blocks while waiting. Simple to reason about and to debug, but a thread costs memory (a stack measured in hundreds of kilobytes to a megabyte) and context switches, so the ceiling is thousands, not hundreds of thousands."],
+          ["Event loop","One thread runs a queue of callbacks. Waiting costs almost nothing because the loop moves on, so concurrency is bounded by memory rather than threads. The cost is that any work that does not yield stops everything."],
+          ["Worker pool","Several single-threaded processes behind one socket, as in a classic pre-fork server. Isolation is excellent and a crash takes one worker, but each process carries its own memory, so the count is small."],
+          ["What a request costs","Memory while it is in flight, one slot in whatever is scarcest (a thread, a worker, a connection), and CPU when it is actually running. Capacity is set by the scarcest of those, which is usually not CPU."],
+          ["Blocking","A call that does not give the runtime a chance to do something else. On an event loop this is fatal to throughput; in a thread-per-request server it only costs that one thread."]
+        ],
+        how:`<p>Find out which model your runtime uses and what its limit is, as a number: the thread pool size, the worker count, or the event loop's effective ceiling. Then find the next limit behind it, which is almost always the database connection pool, and compare them. If your server can hold 500 in-flight requests and the pool has 20 connections, your real concurrency is 20 and the other 480 are queueing.</p>
+              <p>The event loop's failure mode is worth seeing once. This runs a CPU-bound loop and a 10ms timer together:</p>`,
+        code:[ {label:"Node: blocking the loop", lang:"js", code:`const t0 = Date.now();
+setTimeout(() => console.log('timer fired after', Date.now() - t0, 'ms'), 10);
+
+// CPU-bound work inside an async function. await does not help: nothing yields.
+async function hashALot() {
+  const { createHash } = await import('node:crypto');
+  let h = 'seed';
+  for (let i = 0; i < 2_000_000; i++) h = createHash('sha256').update(h).digest('hex');
+  return h;
+}
+hashALot().then(() => console.log('work done after', Date.now() - t0, 'ms'));
+
+// work done after 2100 ms
+// timer fired after 2102 ms   <- a 10ms timer, two seconds late`} ],
+        tradeoff:`<p>You rarely choose this; your language chooses it for you. What you choose is what to do about it. On an event loop, move CPU-bound work to a worker thread or another service. In a thread-per-request server, cap the pool rather than letting it grow until the machine swaps. In both, remember that adding instances multiplies the pressure on everything downstream, which is why the pooling topic in the database stage matters more than it sounds.</p>`,
+        pitfall:"Assuming more concurrency means more throughput. Past the point where the real bottleneck saturates, extra in-flight requests only add queueing, so latency rises while completed work per second stays flat or falls.",
+        exercise:`<p>Run the snippet above, then change the loop to <code>await new Promise(r =&gt; setImmediate(r))</code> every few thousand iterations and run it again. Note how the timer's lateness changes and how total runtime changes. Write down, for a service you work on, the three numbers: in-flight request ceiling, database pool size, and which one you would hit first.</p>`,
+        refs:[ ["Node.js: the event loop","https://nodejs.org/en/learn/asynchronous-work/event-loop-timers-and-nexttick"] ] },
+
+      { id:"linux-basics", name:"Linux for backend engineers: processes, signals and limits",
+        depth:"understand", core:false,
+        line:"The handful of operating system facts that explain restarts, hangs and mysterious failures.",
+        what:`<p>Your service is a process on a Linux box, usually inside a container. A small set of operating system facts explains most of what looks mysterious from inside the application: why it was killed without a stack trace, why it stops accepting connections, why a deploy drops requests.</p>
+              <p>You do not need to be a systems engineer. You need to know what signals your process receives, what limits it runs under, and the four commands that answer "what is it actually doing".</p>`,
+        use:`<p>A container restarts every few hours with no error in the logs and exit code 137. That number is the clue: 128 + 9, meaning SIGKILL, and in a container that almost always means the kernel's out-of-memory killer. No amount of reading the application logs would have told you, because the process was never given a chance to write one.</p>`,
+        concepts:[
+          ["Exit codes","0 is success. A process killed by signal N reports 128 + N, so 143 is SIGTERM (a normal shutdown) and 137 is SIGKILL (something lost patience, usually the OOM killer)."],
+          ["SIGTERM and SIGKILL","SIGTERM is a request to stop, and you can handle it to drain work. SIGKILL cannot be caught. An orchestrator sends SIGTERM, waits a grace period, then sends SIGKILL."],
+          ["File descriptors","Every socket, file and pipe is a descriptor, and the process has a limit on how many it can hold. Leaked connections exhaust it, and the symptom is the unhelpful \"too many open files\"."],
+          ["PID 1","The first process in a container has special signal behaviour: it does not get default signal handlers. If your app is not PID 1 and whatever is does not forward signals, SIGTERM never reaches you and every deploy is a hard kill."],
+          ["cgroup limits","Inside a container, memory and CPU limits come from the cgroup, not from the host. Tools that read host-wide figures will happily report 64GB of RAM to a process allowed 512MB."]
+        ],
+        how:`<p>Learn to answer four questions from a shell. What is it doing, what is it connected to, what is it holding open, and what are its limits:</p>`,
+        code:[ {label:"The four questions", lang:"bash", code:`# What is running, and how much is it using?
+top -b -n1 | head -15
+
+# What sockets does it have, and are they piling up in CLOSE_WAIT?
+ss -tanp | head -20
+ss -s                       # summary counts by state
+
+# What files and sockets is it holding open?
+lsof -p "$PID" | wc -l
+
+# What are its actual limits, as the kernel sees them?
+cat /proc/"$PID"/limits | grep -E 'open files|processes'
+ulimit -n                   # the soft limit for this shell
+
+# Inside a container, the memory ceiling that matters (cgroup v2):
+cat /sys/fs/cgroup/memory.max`} ],
+        tradeoff:`<p>Raising a limit is sometimes right and usually a postponement. If descriptors run out because connections are never closed, a higher <code>ulimit -n</code> buys hours and loses the signal. Raise the limit when the workload genuinely needs it, and only after you have checked that the count is stable rather than climbing.</p>`,
+        pitfall:"Reading an exit code as an application error. 137 and 143 are not your code failing; they are something outside deciding the process should stop. Looking for a bug in the handler wastes the afternoon.",
+        exercise:`<p>Start your service locally, find its PID, and record its open descriptor count. Fire a few hundred requests at it, then record the count again once they have finished. A number that does not come back down is a leak you now know how to find. Then send it <code>SIGTERM</code> by hand and watch whether it drains or dies: that result is the starting point for the graceful shutdown topic in the reliability stage.</p>`,
+        refs:[ ["man7: signal(7)","https://man7.org/linux/man-pages/man7/signal.7.html"] ] },
+
+      { id:"config-secrets", name:"Configuration and secrets",
+        depth:"build", core:true,
+        line:"What changes per environment comes from outside the build, and secrets are not just config.",
+        what:`<p>Anything that differs between your laptop, staging and production is configuration: connection strings, hostnames, feature toggles, timeouts. It belongs outside the artifact, so that one build can run anywhere. Secrets are configuration with a blast radius: a leaked database password is a different kind of incident from a wrong timeout.</p>
+              <p>The practical goal is that the same image runs in every environment, fails loudly at startup if something it needs is missing, and never writes a secret anywhere it can be read later.</p>`,
+        use:`<p>A service reads an optional <code>CACHE_URL</code> and silently falls back to an in-memory cache when it is absent. A typo in the production environment variable means every instance quietly runs its own local cache. Nothing errors. Nothing alerts. You find it weeks later when two users report seeing each other's stale data. Validating config at startup turns that into a failed deploy instead.</p>`,
+        concepts:[
+          ["Config from the environment","Values come from environment variables or a mounted file, read once at startup. The build has no knowledge of which environment it will run in."],
+          ["Secrets are different","They need restricted access, rotation and an audit trail. A secret manager or the orchestrator's secret mechanism provides those; an environment variable in a repository provides none of them."],
+          ["Fail fast","Validate the whole config at startup and refuse to start if it is wrong. A service that starts and then misbehaves is far harder to diagnose than one that never started."],
+          ["No secrets in the image","Anything baked into a layer is readable by anyone who can pull the image, and deleting it in a later layer does not remove it."],
+          ["Rotation","A secret you cannot change without downtime will not be changed. Support two valid values at once so a rotation is a deploy, not an outage."]
+        ],
+        how:`<p>Define the full set of settings in one place, read them once at startup, and validate them there: required values present, numbers parse, URLs are well formed, and anything with a small set of valid values is one of them. Exit non-zero with a message that names what is missing. Then pass the validated object around rather than reading the environment from scattered call sites, so there is exactly one place to look.</p>`,
+        code:[ {label:"Node: refuse to start on bad config", lang:"js", code:`const required = ['DATABASE_URL', 'REDIS_URL', 'JWT_SIGNING_KEY'];
+const missing = required.filter((k) => !process.env[k]);
+if (missing.length) {
+  console.error(\`refusing to start: missing config \${missing.join(', ')}\`);
+  process.exit(78);                 // EX_CONFIG
+}
+
+export const config = Object.freeze({
+  databaseUrl: process.env.DATABASE_URL,
+  redisUrl: process.env.REDIS_URL,
+  jwtSigningKey: process.env.JWT_SIGNING_KEY,
+  requestTimeoutMs: Number(process.env.REQUEST_TIMEOUT_MS ?? 3000),
+  env: process.env.NODE_ENV ?? 'development',
+});
+
+// $ DATABASE_URL=x node config.js
+// refusing to start: missing config REDIS_URL, JWT_SIGNING_KEY
+// exit code 78`} ],
+        tradeoff:`<p>Environment variables are the simplest thing that works and are supported everywhere, but they are visible in a process listing, easy to leak into logs and crash reports, and awkward for anything multi-line. Mounted secret files avoid most of that and cost a little more setup. A secret manager with short-lived credentials is better again, and is worth the complexity once you have more than one service or a compliance requirement. Start with the environment, move to mounted secrets when you have real ones.</p>`,
+        pitfall:"Logging the config object at startup to make debugging easier. It works, and it puts your database password in every log aggregator your team has, in plain text, with a long retention period.",
+        exercise:`<p>Add startup validation to a service you work on: list every setting it reads, make the required ones fail the process with a clear message, and give the optional ones explicit defaults. Then grep the codebase for direct environment reads outside that one module and count how many you find. That count is how many places could have had a typo.</p>`,
+        refs:[ ["The twelve-factor app: config","https://12factor.net/config"] ] },
+
+      { id:"layering", name:"Layering and dependency boundaries",
+        depth:"build", core:true,
+        line:"Where request handling stops and business logic starts, and why the database type should not cross it.",
+        what:`<p>Most backend code settles into three responsibilities: something that speaks HTTP, something that decides what should happen, and something that talks to storage. Keeping them separate is not architectural ceremony. It is what lets you test the decision without a web server, swap the storage without rewriting the decision, and read the rules of the system in one file.</p>
+              <p>The boundary that matters most is the one nobody draws: the database's row type must not reach the handler, and the HTTP request object must not reach the storage layer.</p>`,
+        use:`<p>You need to add "cancel an order" to an API and also run it from a nightly job and a support tool. If the cancellation rules live in the handler, you copy them twice and the three copies drift until cancelling from the support tool skips the refund. If they live in a service function, all three call it and there is one place for the rule.</p>`,
+        concepts:[
+          ["Handler","Speaks the protocol: parse, validate shape, call one thing, map the result to a status code. It should hold no business rules."],
+          ["Service","Holds the decisions and the invariants. It knows nothing about HTTP, and it is the layer worth testing hardest."],
+          ["Repository","Turns domain objects into queries and back. It is where SQL lives and the only layer that knows your schema."],
+          ["Dependency direction","Handlers depend on services, services depend on an interface the repository implements. Nothing points back the other way."],
+          ["Injection","Dependencies are passed in rather than constructed inside. That one habit is what makes a service testable without a database."]
+        ],
+        how:`<p>Draw the line at the two type boundaries. A handler turns the request into plain arguments; a repository turns rows into domain objects. Neither leaks its own types past itself.</p>`,
+        code:[ {label:"Pseudocode: dependency direction", code:`handler(request, response):                 # knows HTTP, no rules
+    input = parse_and_validate(request.body)
+    try:
+        order = orders.cancel(input.order_id, request.user.id)
+        response.status(200).json(to_api_shape(order))
+    except NotOwned:    response.status(403).json(error("NOT_OWNED"))
+    except AlreadyShipped: response.status(409).json(error("ALREADY_SHIPPED"))
+
+service Orders(repo, payments, clock):      # dependencies passed in
+    cancel(order_id, user_id):              # knows the rules, not HTTP
+        order = repo.find(order_id)
+        if order is None:        raise NotFound
+        if order.user != user_id: raise NotOwned
+        if order.shipped:        raise AlreadyShipped
+        payments.refund(order.payment_id)
+        return repo.save(order.cancelled_at(clock.now()))
+
+repository:                                 # knows SQL, not rules
+    find(id)  -> Order | None
+    save(order) -> Order`} ],
+        tradeoff:`<p>Three layers is right for a service with real rules and overkill for one that reads a table and returns it. For genuinely thin endpoints, a handler calling a repository directly is honest and a service layer that only forwards calls is noise. The signal to add the layer is the second caller, or the first rule more complicated than "it exists". Do not pre-build layers for rules you do not have yet.</p>`,
+        pitfall:"Returning database rows straight from a handler. It saves a mapping function on day one, then every column rename becomes a breaking API change, and a column you add for internal use is published to clients the moment it exists.",
+        exercise:`<p>Pick one endpoint with a real rule in it and extract that rule into a function that takes plain arguments and returns a plain result, with the storage call passed in. Write a test for the rule that runs with no database and no HTTP. Then add a second caller for the same function, such as a small script, and confirm the rule did not need to be copied.</p>`,
+        refs:[] },
+
+      { id:"serialization", name:"Serialization and data contracts",
+        depth:"build", core:false,
+        line:"Times, money, absent values and field changes, which is where most wire-format bugs live.",
+        what:`<p>The moment data leaves your process it becomes a contract. JSON has no date type, no decimal type, and no way to say "this field was not sent" as distinct from "this field is null". Each of those gaps produces a specific, recurring bug, and each has a boring fix you can apply once.</p>`,
+        use:`<p>An invoice total computed by summing float prices comes to 99.9999999999986 and is rendered as 100.00 on screen but stored as 99.9999999999986. Reconciliation against the payment provider fails by a fraction of a cent on thousands of rows, and nobody can see the difference by looking.</p>`,
+        concepts:[
+          ["Times","Store and transmit UTC, in one format, and let the client localise. A timestamp without an offset is a bug waiting for a server in a different region."],
+          ["Money","Never a float. Use integer minor units or a decimal type, and carry the currency with the amount, since an amount without a currency is not a quantity."],
+          ["Null versus absent","In a partial update these mean different things: null is \"clear this\" and absent is \"leave it alone\". If your parser collapses them you cannot express one of the two."],
+          ["Additive change","Adding an optional field is safe; removing one, renaming one, or narrowing a type is not. Consumers you do not control are reading this."],
+          ["Unknown fields","A consumer should ignore fields it does not recognise. If it rejects them, you can never add anything without a coordinated release."]
+        ],
+        how:`<p>Fix the three gaps explicitly. Times: ISO 8601 with an offset, UTC on the wire, converted at the edge. Money: an integer of minor units plus a currency code, or your language's decimal type, and never the IEEE 754 double that JSON numbers decode into. Partial updates: either model absence properly or use an explicit operation instead of a PATCH with nullable fields.</p>`,
+        code:[ {label:"Node: why money is not a float", lang:"js", code:`const price = 0.1, tax = 0.2;
+console.log(price + tax);                 // 0.30000000000000004
+console.log((price + tax) === 0.3);       // false
+
+let total = 0;
+for (let i = 0; i < 1000; i++) total += 0.1;
+console.log(total);                       // 99.9999999999986
+
+// Integer minor units: exact.
+let cents = 0;
+for (let i = 0; i < 1000; i++) cents += 10;
+console.log(cents / 100);                 // 100`} ],
+        tradeoff:`<p>JSON is the default because everything speaks it and you can read it in a log. A binary format with a schema, such as protobuf, buys you smaller payloads, generated types and enforced compatibility rules, at the cost of tooling and of not being able to curl an endpoint and read the answer. For a public HTTP API, JSON almost always wins; for high-volume internal traffic between services you control, the schema is worth it. That choice is revisited in the API style and event schema topics.</p>`,
+        pitfall:"Sending a bare number for money because it looks cleaner. JSON numbers are doubles on the other side, so the rounding error is created by the consumer's parser even if your side was exact.",
+        exercise:`<p>Take one API response your service produces and check three things: does every timestamp carry an offset, is every monetary amount an integer of minor units or a string with a currency, and does a PATCH with an explicitly null field do something different from omitting it. Fix whichever is wrong, and write down what you would have to do to fix it if an external client already depended on the old shape.</p>`,
+        refs:[ ["RFC 3339: timestamps on the internet","https://www.rfc-editor.org/rfc/rfc3339.html"] ] },
+
+      { id:"statelessness", name:"Statelessness and where state actually leaks",
+        depth:"build", core:false,
+        line:"A second instance breaks every assumption your service made about being alone.",
+        what:`<p>A stateless service keeps nothing in its own memory or disk that a later request needs. That is what lets you run several copies behind a load balancer, restart any of them, and scale by adding more. It is also an assumption that is quietly broken all the time, and the breakage only shows up once there is a second instance.</p>`,
+        use:`<p>A feature works perfectly for months on one instance. Traffic grows, a second replica is added, and support starts getting reports that logging in works "about half the time", uploads disappear, and a scheduled report is sent twice. Nothing changed in the code. The second instance simply exposed four pieces of state that were never shared.</p>`,
+        concepts:[
+          ["In-memory cache","A map in your process is per-instance. Two instances disagree, and neither invalidation nor the hit rate behaves the way you measured it."],
+          ["Session in memory","If the session lives in the process, a request routed elsewhere is logged out. Sticky sessions hide this until an instance restarts."],
+          ["In-process scheduler","A timer inside the service runs once per instance, so a nightly job with three replicas runs three times."],
+          ["Local disk","An uploaded file written to the container's filesystem is invisible to the other instances and gone at the next deploy."],
+          ["Legitimate local state","Connection pools, prepared statements and metric counters are per-instance on purpose. The test is whether a later request depends on it."]
+        ],
+        how:`<p>Move each kind of state to something shared, and be explicit about what stays local. Sessions go to a shared store or become a signed token. Caches go to a shared cache, or stay local with a short TTL and the knowledge that instances will disagree. Scheduled work gets a lease so only one instance runs it. Uploads go to object storage. Then test it the only way that works: run two instances locally behind anything that round-robins, and use the feature.</p>`,
+        tradeoff:`<p>Sticky sessions are the tempting shortcut: configure the load balancer to send a user back to the same instance and the in-memory session keeps working. It is a real option for a small deployment, and it costs you even load, clean rolling deploys, and the ability to lose an instance without logging those users out. Prefer shared state; reach for stickiness only where the state is genuinely expensive to share, such as a live WebSocket connection, which the real-time topic covers.</p>`,
+        pitfall:"Assuming a single instance will stay a single instance. Every rolling deploy runs two versions at once, however briefly, so even a service you never scale will have two instances the day you ship a change.",
+        exercise:`<p>Run two copies of a service you work on behind a round-robin proxy on your laptop. Exercise login, anything that caches, and anything that uploads a file. Write down every behaviour that breaks. Then fix the cheapest one properly, rather than by turning on sticky sessions, and confirm it works with both instances.</p>`,
+        refs:[] }
 
     ],
     after:[
-      ["Read a request's timing","You can split a slow request into hops and say which hop is slow, before touching the code."]
+      ["Read a request's timing","You can split a slow request into hops and say which hop is slow, before touching the code."],
+      ["Choose a status code","You can pick between 400, 401, 403, 404, 409 and 422 and defend the choice."],
+      ["Name your concurrency ceiling","You can say which model your server uses and which resource runs out first."],
+      ["Read an exit code","You know what 137 and 143 mean and where to look next."],
+      ["Fail a bad deploy at startup","Your service refuses to start on missing config instead of misbehaving later."],
+      ["Test a rule without a database","Your business rules sit behind an interface you can call from a test."],
+      ["Keep money and time correct","Integer minor units, UTC with an offset, and additive-only field changes."],
+      ["Survive a second instance","You know which of your state is per-instance and which has to be shared."]
     ],
-    sources:`<p>Reference, not retrieved while writing: the curl manual, for the <code>--write-out</code> timing variables. The command was run before publishing and its variable names are correct. The hop-by-hop behaviour sketched here is standard, and is covered with sources in the networking and the edge stage.</p>` }
+    sources:`<p>Retrieved while writing: <a href="https://www.rfc-editor.org/rfc/rfc9110.html" target="_blank" rel="noopener">RFC 9110</a>, for the lists of safe and idempotent methods, the status code definitions quoted here, the <code>Allow</code> requirement on 405, and the content negotiation and <code>Vary</code> headers. It also settled two details: POST is neither safe nor idempotent, and 429 is not defined there but in RFC 6585.</p>
+      <p>References, not retrieved while writing: the curl manual for the timing variables, RFC 6585 for 429, RFC 3339 for timestamps, the twelve-factor config page, the Node event loop guide, and man7 for signal semantics.</p>
+      <p>Every snippet in this stage was run before publishing, and the output shown in the comments is the real output: the curl timing command, the event loop demonstration, the config validation, and the float money example.</p>` }
 ];
 
 const DEPTH = { understand:"Understand", build:"Build" };
@@ -340,7 +589,7 @@ function renderTopic(t){
   if (t.tradeoff) body += `<h4 class="t-h">Trade-offs</h4>${t.tradeoff}`;
   if (t.pitfall) body += `<div class="trap"><p><span class="label">Pitfall:</span> ${t.pitfall}</p></div>`;
   if (t.exercise) body += `<details class="reveal"><summary>Exercise</summary>${t.exercise}</details>`;
-  if (t.refs) body += `<p class="src">References: ` + t.refs.map(([l,u]) => `<a href="${u}" target="_blank" rel="noopener">${l}</a>`).join(', ') + `</p>`;
+  if (t.refs && t.refs.length) body += `<p class="src">References: ` + t.refs.map(([l,u]) => `<a href="${u}" target="_blank" rel="noopener">${l}</a>`).join(', ') + `</p>`;
 
   const pills = (t.core ? `<span class="lvl core">Core</span>` : '')
               + `<span class="lvl ${t.depth}">${DEPTH[t.depth]}</span>`;
