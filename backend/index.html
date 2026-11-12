@@ -3739,7 +3739,227 @@ psql scratch -c "select max(created_at) from orders;"
       ["Know your real RPO and RTO","Measured by a restore you actually performed, not by the backup schedule."]
     ],
     sources:`<p>Verified by running, on Node 22 in this container: the jitter comparison, where ten clients at attempt three spread from 4ms to 711ms instead of all firing at 800ms, and the graceful shutdown sequence, where SIGTERM arriving during a 400ms request failed readiness immediately, let the in-flight request complete with 200, and then exited.</p>
-      <p>References, not retrieved while writing: the Kubernetes probe documentation and the PostgreSQL continuous archiving page.</p>` }
+      <p>References, not retrieved while writing: the Kubernetes probe documentation and the PostgreSQL continuous archiving page.</p>` },
+
+{ num:13, id:"observability", phase:5, name:"Observability and debugging",
+    intro:"Being able to answer a question you did not anticipate, about a system you cannot pause.",
+    topics:[
+
+      { id:"structured-logs", name:"Structured logs and correlation IDs",
+        depth:"build", core:true,
+        line:"One object per event, one id threaded through everything a request touches.",
+        what:`<p>A log line written as prose can be read by a person and not by a machine. Once you have more than one instance, reading by eye stops working, and you need to filter by user, by endpoint, by status, by duration. That requires fields, not sentences.</p>
+              <p>The second half is the correlation id: one identifier generated at the edge and attached to every log line, every downstream call and every job the request spawns, so a single search returns the whole story.</p>`,
+        use:`<p>A customer reports a failed checkout at about 14:20. Without a correlation id you search for their user id across four services, match timestamps by hand, and hope the clocks agree. With one, you ask them for the id shown on the error page and get every line from every service for that exact request, in order.</p>`,
+        concepts:[
+          ["One event, one object","Structured output, usually JSON, with consistent field names. <code>user_id</code> in one service and <code>userId</code> in another makes a cross-service query impossible."],
+          ["Correlation id","Generated at the edge if absent, accepted from the caller if present, attached to every line and propagated to every downstream call and job."],
+          ["Context, not concatenation","Attach fields to a logger bound to the request, so every line carries them without being passed by hand."],
+          ["Levels that mean something","Error means someone must act. Warn means it is suspicious. Info is the event stream. Debug is off in production. Logging handled errors at error level trains people to ignore the level."],
+          ["Sampling","High-volume successful requests can be sampled; errors never. Full logging of a hot path can cost more than serving it."]
+        ],
+        how:`<p>Put the correlation id in request-scoped storage at the edge and have the logger read it automatically, so nobody has to remember to include it. Log one line per completed request with the method, route, status, duration and identity, which answers most questions on its own, plus lines for the interesting events in between.</p>
+              <p>Return the id to the client in a header and show it on error pages. It converts a vague report into an exact query.</p>`,
+        code:[ {label:"What a useful log line contains", lang:"json", code:`{
+  "ts":         "2026-11-12T07:41:03.118Z",
+  "level":      "info",
+  "msg":        "request completed",
+  "request_id": "01J9F0G7Q0X2",
+  "trace_id":   "4bf92f3577b34da6a3ce929d0e0e4736",
+  "method":     "POST",
+  "route":      "/orders",
+  "status":     201,
+  "duration_ms": 142,
+  "user_id":    42,
+  "tenant_id":  7,
+  "db_ms":      88,
+  "cache_hit":  false
+}
+
+route, not path: "/orders/8841" as a field value gives you one million
+distinct values and no way to group. Keep the template in "route" and
+the id in its own field.
+
+The same request_id appears on every line this request produced, in
+every service it called, and on every job it enqueued.`} ],
+        tradeoff:`<p>Logging everything makes any question answerable and costs storage, ingestion fees and sometimes more CPU than the work itself. Logging little is cheap until the incident where you needed the line you did not write. The usual resolution is by outcome rather than by volume: keep every error and every slow request in full, sample successful fast ones, and keep a short full-fidelity window with a long sampled one. That gives you the detail where it matters and bounds the bill.</p>`,
+        pitfall:"Logging the full request or response body to be thorough. It fills your log store, it is almost never the field you needed, and on an authentication endpoint it writes credentials into a system with broad read access and long retention.",
+        exercise:`<p>Add a correlation id at your edge, bind it to the logger, propagate it on outbound calls, and return it in a response header. Then pick a past incident and check whether you could now answer it with one query. Finally, grep a day of logs for <code>password</code>, <code>token</code> and <code>authorization</code>.</p>`,
+        refs:[] },
+
+      { id:"metrics", name:"Metrics: golden signals, RED and USE, and histograms",
+        depth:"build", core:true,
+        line:"An average latency is a number that describes nobody's experience.",
+        what:`<p>Logs tell you about one request; metrics tell you about all of them. A small, well-chosen set answers "is it healthy" at a glance, and the choice of aggregation decides whether the answer is true.</p>
+              <p>The single most common mistake is recording an average. A mean latency is dominated by the fast majority and conceals exactly the behaviour you need to see.</p>`,
+        use:`<p>A dashboard shows mean latency at 54ms, flat all week, so the service looks healthy. The p99 is 465ms and the p99.9 is over four seconds. One request in a thousand takes four seconds, and on a page that makes ten calls, roughly one page view in ten contains a slow one. The mean is not wrong; it answers a question nobody asked.</p>`,
+        concepts:[
+          ["Golden signals","Latency, traffic, errors and saturation. Four numbers that between them say whether a service is in trouble."],
+          ["RED and USE","RED for request-driven services: rate, errors, duration. USE for resources: utilisation, saturation, errors. Most backends need both."],
+          ["Counter, gauge, histogram","A counter only rises, a gauge moves up and down, a histogram buckets observations so percentiles can be computed. Latency is always a histogram."],
+          ["Percentiles do not average","You cannot average the p99 of two instances to get the fleet p99. Aggregate the buckets, then compute the percentile, which is why the histogram must be exported, not the summary."],
+          ["Cardinality","Every distinct label combination is a separate series. A user id as a label will take down your metrics system faster than your traffic will."]
+        ],
+        how:`<p>Instrument the four golden signals per endpoint first, with latency as a histogram. Label by route template, method and status class, and stop there: the temptation to add user, tenant or id is how a metrics backend falls over.</p>
+              <p>Prometheus with Grafana is the common toolchain, and OpenTelemetry is the vendor-neutral way to produce the data so you are not rewriting instrumentation when you change backend.</p>`,
+        code:[ {label:"What the mean hides, computed", lang:"text", code:`10,000 requests: 95% take 15-30ms, 4.5% take 200-500ms, 0.5% take 2-5s.
+
+mean      54ms      <- the dashboard number, flat and reassuring
+p50       23ms      <- what a typical user sees
+p95       30ms
+p99      465ms      <- 1 in 100 requests
+p99.9   4404ms      <- 1 in 1000, and they are still your users
+max     4992ms
+
+A page making 10 such calls:
+  chance all 10 are under the p99:  90.4%
+  chance at least one is slower:     9.6%
+
+That is tail amplification. A one-in-a-hundred slow call becomes a
+one-in-ten slow page, so the p99 of a dependency is closer to the p90
+of the page that uses it ten times.`} ],
+        tradeoff:`<p>More labels make a metric more useful for slicing and multiply the number of stored series, which is what actually costs money and eventually breaks the collector. High cardinality belongs in logs and traces, which are indexed per event; metrics are for low-cardinality aggregates. The practical rule is that a label's set of values should be small, bounded and known in advance. Route template qualifies, status class qualifies, tenant usually does not, and user id never does.</p>`,
+        pitfall:"Alerting on a mean. It moves slowly, it is dominated by healthy requests, and a serious tail problem can double while the mean barely changes, so the alert fires after the complaints.",
+        exercise:`<p>Take one endpoint and export a latency histogram, then plot the mean and the p99 on the same graph for a week. Note how differently they move. Then count the distinct label combinations your service produces; if the number has a user id in it, fix that before it fixes you.</p>`,
+        refs:[ ["Prometheus: histograms and summaries","https://prometheus.io/docs/practices/histograms/"] ] },
+
+      { id:"tracing", name:"Distributed tracing and context propagation",
+        depth:"understand", core:false,
+        line:"Earns its cost at the second or third service; before that, logs with a request id get you most of the way.",
+        what:`<p>A trace follows one request across services as a tree of timed spans, showing where the time went and which call failed. It is the right tool when a request crosses several services and you cannot tell which one is slow.</p>
+              <p>It is also frequently adopted too early. For a single service, structured logs with a correlation id and a per-component latency breakdown answer the same questions for a fraction of the effort.</p>`,
+        use:`<p>Checkout takes 2.3 seconds and touches five services. The trace shows 1.9 seconds inside a single call that the inventory service makes to a legacy pricing system, three levels down, which nobody on the checkout team knew existed. No amount of reading the checkout service's logs would have found it.</p>`,
+        concepts:[
+          ["Span","One timed operation with a name, a start, a duration, attributes and a parent. A trace is a tree of them sharing a trace id."],
+          ["Propagation","The trace and parent span ids travel in a header. If any service drops it, the trace splits in two and the connection is lost."],
+          ["W3C Trace Context","The standard that makes propagation interoperable between vendors. Two headers: <code>traceparent</code> and <code>tracestate</code>."],
+          ["Sampling","Tracing every request is expensive. Head sampling decides at the start, cheap and may miss the interesting one; tail sampling decides after, keeping errors and slow traces, and costs more to run."],
+          ["OpenTelemetry","The vendor-neutral API and SDK. Instrument against it so the backend is a configuration choice, not a rewrite."]
+        ],
+        how:`<p>Adopt the standard headers rather than inventing your own, so every library and vendor agrees. Instrument the boundaries first — incoming requests, outgoing calls, database queries — which gives most of the value automatically, and add custom spans only around work you suspect.</p>
+              <p>Then connect traces to logs by putting the trace id into every log line, as the logging topic does. Moving between the two is where most of the practical value sits.</p>`,
+        code:[ {label:"The W3C header, exactly", lang:"text", code:`traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
+             │  │                                │                │
+             │  │                                │                └ trace-flags, 2 hex
+             │  │                                └ parent-id,  16 hex (8 bytes)
+             │  └ trace-id, 32 hex (16 bytes)
+             └ version, 2 hex
+
+Format:  version "-" trace-id "-" parent-id "-" trace-flags
+
+trace-flags: the least significant bit is "sampled". The specification
+says that when set, it "denotes that the caller may have recorded trace
+data", and when unset "the caller did not record trace data
+out-of-band".
+
+A second header, tracestate, carries vendor-specific data alongside it.
+
+Every service must pass traceparent through, including through your
+queues and jobs. A service that drops it does not break anything
+visibly: it just silently starts a new trace, and the connection
+between the two halves is gone.`} ],
+        tradeoff:`<p>Head sampling at a low rate is cheap and will usually not have sampled the request someone is asking about. Tail sampling keeps every error and slow trace, which is what you actually want, and requires buffering every span until the request finishes, so it costs memory and a collector tier. Start with head sampling at a few percent plus a rule that always samples errors; move to tail sampling when "we do not have a trace for that request" becomes the recurring answer.</p>`,
+        pitfall:"Instrumenting one service and declaring tracing done. A trace that stops at your boundary shows you what you already knew; the value is entirely in the hops you cannot see, so propagation through every service, queue and job is the work.",
+        exercise:`<p>Add trace context propagation to two services that call each other and confirm one trace spans both. Then send a request through a queue and check whether the trace survives: it usually does not, because the header was not carried in the message, and that gap is where traces most often break.</p>`,
+        refs:[ ["W3C Trace Context","https://www.w3.org/TR/trace-context/"], ["OpenTelemetry","https://opentelemetry.io/docs/"] ] },
+
+      { id:"alerting-slos", name:"Alerting, SLOs, runbooks and postmortems",
+        depth:"understand", core:false,
+        line:"Alert on what users feel. Every page needs an action, or it trains people to ignore pages.",
+        what:`<p>An alert should mean a person must do something now. Most alerting systems drift away from that: they alert on causes rather than symptoms, on thresholds nobody chose deliberately, and on conditions that resolve themselves. The result is alert fatigue, and then a real alert arrives among the noise.</p>
+              <p>Service level objectives are the discipline that keeps the list honest: pick the few things users care about, set a target you would genuinely act on, and alert when you are burning through the allowance.</p>`,
+        use:`<p>CPU on one instance hits 85% at 3am and pages someone. They look, find the service healthy and latency normal, and go back to sleep. This happens twice a week. Three months later the same person silences a page that was the start of a real outage, because the prior has been established that pages are noise.</p>`,
+        concepts:[
+          ["Symptoms, not causes","Alert on error rate and latency, which users feel. High CPU with healthy latency is information, not an emergency."],
+          ["SLI, SLO and SLA","The indicator is what you measure, the objective is the target you set yourself, the agreement is the contract with a customer and a penalty. Confusing the last two is expensive."],
+          ["Error budget","If the objective is 99.9%, the remaining 0.1% is a budget. Spending it slowly is normal; burning it fast is the alert."],
+          ["Burn rate","Alerting on how quickly the budget is being consumed catches both a sudden outage and a slow degradation, with far fewer false alarms than a fixed threshold."],
+          ["Runbook","What to check and what to do, linked from the alert. An alert without one assumes whoever is on call has the knowledge that only two people have."]
+        ],
+        how:`<p>Pick two or three indicators per service: availability as the fraction of requests that succeeded, and latency as the fraction served under a threshold. Set an objective you would genuinely act on, then alert on the burn rate rather than on an instantaneous value, with a fast rule for an outage and a slow one for a degradation.</p>
+              <p>Everything else becomes a dashboard. The test for whether something should page is simple: if the answer at 3am is "look at it in the morning", it is not a page.</p>`,
+        code:[ {label:"Burn rate instead of a threshold", lang:"text", code:`SLO: 99.9% of requests succeed over 30 days
+     error budget = 0.1% of requests
+
+Burn rate = observed error rate / budgeted error rate.
+At 1x you will exactly exhaust the budget in 30 days.
+
+  fast:  14.4x over 1 hour    -> 2% of the budget in an hour.  PAGE.
+  slow:  3x over 6 hours      -> a real degradation.           TICKET.
+
+Why two rules: the fast one catches an outage within minutes, the slow
+one catches the quiet 0.3% error rate that a fixed threshold at 1%
+never notices and that eats the month's budget by the 20th.
+
+Every alert carries:
+  what it means in one line
+  a link to the dashboard that shows it
+  a link to the runbook
+  who owns the service
+
+If any of those four is missing, the alert is not finished.`} ],
+        tradeoff:`<p>Tight objectives sound responsible and are expensive: each additional nine costs real engineering, and a target nobody can meet is ignored within a quarter. A loose one is cheap and may be below what users will tolerate. Set it from observed behaviour and complaints rather than from a round number, and treat an objective you have never missed as evidence it is too loose to be informing any decision. The budget only means something if spending it occasionally changes what the team does.</p>`,
+        pitfall:"Paging on anything that resolves itself. Every self-resolving alert teaches the on-call engineer that alerts can be waited out, and that lesson is applied to the next one too.",
+        exercise:`<p>List your current alerts and mark each as symptom or cause, and whether it has a runbook. Delete or downgrade every cause-based alert with no user-visible effect. Then define one availability objective for your most important endpoint, measure last month against it, and see whether you would have met it.</p>`,
+        refs:[] },
+
+      { id:"debugging-prod", name:"Debugging production systematically",
+        depth:"build", core:true,
+        line:"Establish what changed, confirm the symptom, bisect the path, one hypothesis at a time.",
+        what:`<p>Debugging a live system under pressure is where method matters most and is used least. The instinct is to guess, change something, and see. That occasionally works, frequently makes things worse, and destroys the evidence either way.</p>
+              <p>A method is not slower. It is faster, because it stops you investigating four things at once and being unable to attribute the result.</p>`,
+        use:`<p>Latency triples at 09:14. Someone restarts the service because that usually helps. It does help, for twenty minutes, then returns. The restart destroyed the connection state, the heap and the in-flight requests, which contained the evidence, and the memory leak behind it takes another two days to find.</p>`,
+        concepts:[
+          ["What changed","The overwhelming majority of incidents follow a change: a deploy, a configuration edit, a feature flag, a traffic shift, a dependency's deploy. Establish the timeline first."],
+          ["Confirm the symptom","Reproduce it as a measurement, not a report. &quot;Users say it is slow&quot; and &quot;p99 on POST /orders went from 200ms to 4s at 09:14&quot; lead to different investigations."],
+          ["Bisect the path","Use the hops from the request-path topic. Edge, application, database, each dependency. Halve the search space rather than guessing a culprit."],
+          ["One hypothesis at a time","State it, state what would disprove it, then test it. Two simultaneous changes mean you learn nothing from the outcome."],
+          ["Preserve evidence","Before restarting, capture what dies with the process: a heap snapshot, a thread dump, current connections, in-flight requests."]
+        ],
+        how:`<p>Work the same order every time, and write as you go, because the notes become the postmortem and stop you re-checking things. The order below is deliberately boring, which is the point: it is usable at 3am by someone who did not write the service.</p>`,
+        code:[ {label:"The order, every time", lang:"text", code:`1. WHAT CHANGED
+   deploys, config, flags, dependency deploys, traffic shape,
+   data volume, a scheduled job. Line them up against the time.
+   If something changed at 09:12 and the symptom began at 09:14,
+   you are probably finished already.
+
+2. CONFIRM THE SYMPTOM AS A NUMBER
+   which endpoint, which metric, when it started, how big.
+   "slow" is not actionable. "p99 POST /orders 200ms -> 4s at 09:14" is.
+
+3. SCOPE IT
+   all endpoints or one?   all instances or one?
+   all users or one tenant?  all regions or one?
+   Each answer eliminates half the possibilities.
+
+4. BISECT THE PATH
+   edge -> application -> database -> dependencies.
+   Where does the latency first appear? The hop before it is innocent.
+
+5. ONE HYPOTHESIS
+   write it down, write what would disprove it, then test that.
+   Do not change two things.
+
+6. ONLY THEN CHANGE SOMETHING
+   and if you must restart, capture the heap, the threads and the
+   connection state first. A restart is the end of the investigation,
+   not the start.`} ],
+        tradeoff:`<p>Mitigating first and investigating later is usually correct when customers are affected: roll back, fail over, shed load, then find out why. The cost is that mitigation often destroys the evidence, and the incident recurs because the cause was never found. Resolve it by capturing before mitigating — a heap snapshot and a few diagnostics take seconds — rather than by delaying the mitigation. The only situation where investigating first is right is when you cannot mitigate without knowing more.</p>`,
+        pitfall:"Restarting as the first response. It resolves the symptom often enough to be reinforced as a habit, it discards every piece of in-memory evidence, and it guarantees the same incident recurs with no more information than the first time.",
+        exercise:`<p>Take your last incident and rewrite it against the six steps. Mark where the investigation actually jumped ahead, which is almost always between step 1 and step 5. Then write the one-page runbook for your most-paged alert, in that order, and give it to someone who has never debugged the service.</p>`,
+        refs:[] }
+
+    ],
+    after:[
+      ["Answer a question with one query","Structured logs, consistent fields, a correlation id threaded end to end."],
+      ["Measure what users feel","Golden signals per endpoint, latency as a histogram, cardinality under control."],
+      ["Know when tracing pays","You can say what it adds over logs with a request id, and where propagation breaks."],
+      ["Alert on symptoms","Burn-rate rules against an objective, every page with an action and a runbook."],
+      ["Debug without guessing","A fixed order, one hypothesis at a time, and evidence captured before any restart."]
+    ],
+    sources:`<p>Retrieved while writing: the <a href="https://www.w3.org/TR/trace-context/" target="_blank" rel="noopener">W3C Trace Context</a> recommendation. The header name, the field order, the 2/32/16/2 hex lengths, the example value and the quoted description of the sampled flag all come from it rather than from memory.</p>
+      <p>Computed while writing: the latency distribution in the metrics topic. The mean of 54ms against a p99 of 465ms and a p99.9 of 4404ms is the real output over 10,000 samples, as is the tail amplification figure showing that a page making ten such calls has a 9.6% chance of containing at least one slow one.</p>
+      <p>References, not retrieved while writing: the Prometheus histogram guidance and the OpenTelemetry documentation.</p>` }
 ];
 
 const DEPTH = { understand:"Understand", build:"Build" };
