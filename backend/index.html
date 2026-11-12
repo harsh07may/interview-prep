@@ -1128,7 +1128,416 @@ oasdiff breaking origin/main:openapi.json openapi.json`} ],
       ["Choose a style on cost","You can name what REST, gRPC and GraphQL each take away, not just what they give."]
     ],
     sources:`<p>Verified while writing, against a live PostgreSQL 16.15 in this container: the keyset pagination queries and the index they use, the offset duplication demonstration (the comparison in the snippet is the real result, not an illustration), and the idempotency key table with all three of its cases, including the concurrent claim returning no row. The Redis token bucket script was loaded and run against Redis 7.0.15, and the seven-request trace is its actual output.</p>
-      <p>References, not retrieved while writing: RFC 9457 for problem details, RFC 8594 for the <code>Sunset</code> header, RFC 6585 for 429, the Idempotency-Key header draft, the JSON Schema, OpenAPI and GraphQL sites, the gRPC core concepts page, and the Redis scripting documentation.</p>` }
+      <p>References, not retrieved while writing: RFC 9457 for problem details, RFC 8594 for the <code>Sunset</code> header, RFC 6585 for 429, the Idempotency-Key header draft, the JSON Schema, OpenAPI and GraphQL sites, the gRPC core concepts page, and the Redis scripting documentation.</p>` },
+
+{ num:4, id:"database", phase:2, name:"Data modelling and the database",
+    intro:"The database is where correctness lives and where performance is usually lost.",
+    topics:[
+
+      { id:"sql-fluency", name:"SQL you need fluently",
+        depth:"build", core:true,
+        line:"Joins, aggregation and one window function, without looking them up each time.",
+        what:`<p>Everything later in this stage assumes you can write the query first. Indexes, plans and N+1 problems are all about making a query you already understand go faster. This topic is the floor: the joins, the grouping, and the one window function that replaces a page of application code.</p>`,
+        use:`<p>"Show each customer's most recent order." In application code that is a query for customers, then a query per customer, then sorting in memory. In SQL it is one statement that the database can plan, index and execute in a single pass.</p>`,
+        concepts:[
+          ["Join types","Inner keeps matches; left keeps every row on the left and nulls the right. Most &quot;missing rows&quot; bugs are an inner join where a left join was meant."],
+          ["Grouping","<code>GROUP BY</code> collapses rows; every selected column must be grouped or aggregated. <code>WHERE</code> filters rows before grouping, <code>HAVING</code> filters groups after."],
+          ["Null","Null is unknown, not a value: <code>null = null</code> is not true, and <code>count(col)</code> skips nulls while <code>count(*)</code> does not. Use <code>IS NULL</code> and <code>coalesce</code>."],
+          ["Subquery versus CTE","A subquery inlines; a common table expression names a step and makes a long query readable. In modern Postgres a CTE is not an optimisation fence by default."],
+          ["Window function","Computes across a set of rows while keeping every row. <code>row_number() OVER (PARTITION BY ... ORDER BY ...)</code> is the one to learn first."]
+        ],
+        how:`<p>Learn the "latest row per group" shape properly, because it comes up constantly and the naive versions are all wrong: <code>GROUP BY</code> with <code>max(created_at)</code> gives you the date but not the row it came from, and joining back on the max date duplicates rows when two share a timestamp.</p>`,
+        code:[ {label:"Postgres: the latest row per group", lang:"sql", code:`select customer_id, id, total_cents, created_at
+from (
+  select o.*,
+         row_number() over (partition by customer_id
+                            order by created_at desc, id desc) as rn
+  from orders o
+) ranked
+where rn = 1
+order by customer_id;
+
+--  customer_id |  id   | total_cents |          created_at
+-- -------------+-------+-------------+-------------------------------
+--            1 | 27382 |      497372 | 2026-10-27 10:16:47.843072+00
+--            2 | 37027 |      166057 | 2026-11-07 00:16:28.905626+00
+--            3 |  6681 |       70847 | 2026-11-12 07:18:17.99797+00
+
+-- The id in ORDER BY is the tiebreaker. Without it, two orders sharing
+-- a timestamp make "the latest" ambiguous and the result unstable.`} ],
+        tradeoff:`<p>Postgres also has <code>DISTINCT ON</code>, which expresses the same thing more briefly and is usually faster, at the cost of being Postgres-only. <code>row_number()</code> is standard SQL and works everywhere, and it generalises: change <code>rn = 1</code> to <code>rn &lt;= 3</code> and you have the latest three. Learn the window version first and use <code>DISTINCT ON</code> as a shortcut when you know you are staying on Postgres.</p>`,
+        pitfall:"Filtering a left join in the WHERE clause. Putting a condition on the right-hand table in WHERE turns the left join back into an inner join, silently dropping the unmatched rows you added the left join to keep. The condition belongs in the ON clause.",
+        exercise:`<p>Against a table you know, write three queries without looking anything up: every customer with their order count including those with none, the top five by total spend, and each customer's most recent order as a whole row. Then check the first one actually returns the zero-order customers.</p>`,
+        refs:[ ["PostgreSQL: window functions","https://www.postgresql.org/docs/current/tutorial-window.html"] ] },
+
+      { id:"relational-modelling", name:"Relational modelling and deliberate denormalization",
+        depth:"build", core:true,
+        line:"One fact in one place, until you decide otherwise on purpose and say how you will keep the copies true.",
+        what:`<p>Normalization has one practical rule behind the formal ones: every fact lives in exactly one place. If a customer's email appears in both <code>customers</code> and every <code>orders</code> row, then changing it means finding all the copies, and any you miss become a second, contradictory truth.</p>
+              <p>Denormalizing is duplicating a fact on purpose, for speed. That is a legitimate decision. It becomes a bug when it is accidental, or when nobody wrote down how the copies stay in step.</p>`,
+        use:`<p>An order needs the price the customer paid. Reading it from the product row seems normalized, and it is wrong: when the price changes next month, every historical order silently restates itself and your revenue reports change. The price at the time of sale is a different fact from the current price, and it belongs on the order.</p>`,
+        concepts:[
+          ["One fact, one place","The working definition of normalized. Enough to catch almost everything the formal normal forms catch."],
+          ["A snapshot is not duplication","Storing what something cost at the time of the order is recording a separate fact, not copying one. Historical records need this."],
+          ["Deliberate denormalization","A cached count, a flattened field, a materialised total. Fine, if you can name what updates it and what happens when that fails."],
+          ["Entity or attribute","If a thing has its own lifecycle, identity or history, it is a table. If it only ever exists as part of its parent, it is a column."],
+          ["Nullable columns","Several columns that are only meaningful together, all nullable, usually mean a missing table."]
+        ],
+        how:`<p>Start normalized and make the model say what is true, then denormalize in response to a measured problem rather than an anticipated one. When you do, write down three things next to the column: what the source of truth is, what updates the copy, and how you detect drift. A nightly job that recomputes and compares is cheap and converts a silent inconsistency into an alert.</p>`,
+        code:[ {label:"The distinction that matters", lang:"sql", code:`-- Wrong: the order reads today's price, so history rewrites itself.
+select o.id, p.price_cents
+from order_items o join products p on p.id = o.product_id;
+
+-- Right: the price at the time of sale is its own fact.
+create table order_items (
+  order_id        bigint  not null references orders(id),
+  product_id      bigint  not null references products(id),
+  qty             int     not null check (qty > 0),
+  unit_price_cents bigint not null,   -- captured at checkout
+  primary key (order_id, product_id)
+);
+
+-- Deliberate denormalization, with its rule written down:
+--   orders.item_count is maintained by the application on write, and
+--   recomputed nightly; a mismatch raises an alert rather than silently
+--   correcting, because a mismatch means a code path that forgot.
+alter table orders add column item_count int not null default 0;`} ],
+        tradeoff:`<p>A normalized model is easier to keep correct and needs joins to read. A denormalized one reads faster and gives you a consistency problem you now own forever. The asymmetry worth remembering: a slow correct query can be fixed later with an index, a cache or a read model, while inconsistent data is often unrecoverable because you cannot tell which copy was right. Normalize first; buy speed later with the tools in the caching stage.</p>`,
+        pitfall:"Adding a denormalized counter with no way to detect drift. It will drift, because some code path will update the rows without updating the count, and by the time anyone notices there is no way to know when it diverged or what the real figure was.",
+        exercise:`<p>Find a denormalized column in a schema you work on and write the query that recomputes it from the source of truth. Run it across the whole table and count the mismatches. If the count is not zero, you have just found a bug; if it is zero, schedule that query and alert on it, because the count will not stay zero.</p>`,
+        refs:[] },
+
+      { id:"keys-constraints", name:"Keys, constraints and integrity in the database",
+        depth:"build", core:true,
+        line:"A rule in the database cannot be bypassed; a rule in the application can.",
+        what:`<p>Every rule you enforce only in application code has an exception: the migration script, the data fix someone ran at 2am, the second service that writes the same table, the bug in the one code path nobody tested. A constraint in the database applies to all of them.</p>
+              <p>Constraints also carry information to the query planner, so they can make queries faster as well as safer.</p>`,
+        use:`<p>Two checkout requests arrive at the same instant for the last item. Both read stock as 1, both decide it is fine, both insert. The application's check was correct and still allowed it, because two processes ran it concurrently. A unique constraint or a check in the database would have rejected the second one regardless of how the code was written.</p>`,
+        concepts:[
+          ["Primary key","The row's identity. Surrogate keys (an id column) are stable and meaningless; natural keys (an email) are meaningful and change, which is why surrogates usually win."],
+          ["UUID v4 versus v7 versus bigint","A bigint is small and ordered. UUID v4 is random, so inserts land all over the index and it fragments. UUID v7 is time-ordered, which restores locality while staying unguessable."],
+          ["Foreign key","Makes an orphan row impossible. The cost is a lock on the referenced row during writes and some care at delete time, through <code>ON DELETE</code>."],
+          ["Unique","The only reliable way to prevent a duplicate under concurrency. A <code>SELECT</code> then <code>INSERT</code> in application code is a race, always."],
+          ["Check","Encodes a rule in the column itself: a non-negative total, a status from a fixed set. Cheap, and it documents the domain to the next reader."]
+        ],
+        how:`<p>Write the constraints with the table, not later. For each column ask whether null is genuinely meaningful; if not, make it <code>NOT NULL</code>, which is the single highest-value constraint. Then add uniqueness for anything the business says is unique, foreign keys for every reference, and checks for every fixed set and every range.</p>`,
+        code:[ {label:"Postgres: a table that defends itself", lang:"sql", code:`create table orders (
+  id           bigint generated always as identity primary key,
+  customer_id  bigint      not null references customers(id),
+  status       text        not null default 'pending'
+               check (status in ('pending','paid','shipped','cancelled')),
+  total_cents  bigint      not null check (total_cents >= 0),
+  currency     char(3)     not null default 'INR',
+  created_at   timestamptz not null default now()
+);
+
+-- Uniqueness that holds under concurrency, including the soft-delete case:
+-- only one live order per external reference, deleted ones do not collide.
+create unique index orders_one_live_ref
+  on orders (external_ref) where deleted_at is null;`} ],
+        tradeoff:`<p>Foreign keys are occasionally dropped at very high write volumes, because each one takes a lock on the parent row and adds a check per write. That is a real optimisation and a rare one: measure first, because the usual result is that the constraint costs a few percent and prevents a class of bug that costs days. If you do drop one, you have taken on the job it was doing, and you need a periodic query that finds orphans.</p>`,
+        pitfall:"Checking uniqueness with a SELECT before the INSERT. Under concurrency both selects find nothing and both inserts succeed. The INSERT must be the check, with a unique constraint behind it, and the duplicate handled by catching the violation.",
+        exercise:`<p>Take one table you own and add every constraint that is true but unenforced: not-null on columns that are never meaningfully empty, a check on every status-like column, and a unique index on anything the business treats as unique. Run the migration against a copy of production data first. Whatever it rejects is data that was already wrong, which is the most valuable output of the exercise.</p>`,
+        refs:[ ["PostgreSQL: constraints","https://www.postgresql.org/docs/current/ddl-constraints.html"] ] },
+
+      { id:"indexes", name:"Indexes",
+        depth:"build", core:true,
+        line:"Column order decides how much of the index you actually skip, and every index taxes writes.",
+        what:`<p>An index is a sorted structure that lets the database find rows without reading the table. A B-tree, the default, is sorted by its columns in order, which is why the order matters: you can seek on a leading prefix, and only filter on what comes after.</p>
+              <p>Every index is also a cost: each insert, update and delete has to maintain it. Unused indexes are pure overhead, and most schemas have several.</p>`,
+        use:`<p>An endpoint listing one customer's recent orders is slow. The table has an index on <code>created_at</code>, so the plan looks reasonable: it is an index scan, not a sequential scan. The problem is invisible until you count the pages it reads, because the database is scanning the index in date order and discarding everything that belongs to other customers.</p>`,
+        concepts:[
+          ["B-tree","Sorted by the indexed columns, left to right. Supports equality, ranges, sorting and prefix matching, and it is the right answer unless you have a specific reason otherwise."],
+          ["Leftmost prefix","An index on (a, b, c) serves queries on a, on a and b, and on all three. It cannot seek on b alone, though it may still scan and filter."],
+          ["Equality first","Put columns used with <code>=</code> before columns used for ranges or sorting. Then the seek lands on exactly the right slice and the rest is already in order."],
+          ["Covering","If the index holds every column the query needs, the database never touches the table. <code>INCLUDE</code> adds columns for this without widening the key."],
+          ["Selectivity","An index helps in proportion to how much it eliminates. On a column with three distinct values across a million rows, a scan is often cheaper."]
+        ],
+        how:`<p>Index for the queries you actually run, not for every column. For each slow query, write the index with equality columns first, then the sort column in the direction you sort. Then prove it with buffer counts rather than with the plan shape, because the plan can look identical while the work is very different.</p>`,
+        code:[ {label:"Postgres: same plan, 2.5x the I/O", lang:"sql", code:`-- Query: one customer's most recent orders.
+select id from orders where customer_id = 42 order by created_at desc limit 20;
+
+-- Index (created_at desc, customer_id): the filter column is trailing.
+--  Limit (actual rows=20 loops=1)
+--    Buffers: shared hit=20 read=42            <- 62 pages touched
+--    ->  Index Scan using idx_wrong on orders
+--          Index Cond: (customer_id = 42)
+
+-- Index (customer_id, created_at desc): equality first, then the sort.
+--  Limit (actual rows=20 loops=1)
+--    Buffers: shared hit=23 read=2             <- 25 pages touched
+--    ->  Index Scan using idx_right on orders
+--          Index Cond: (customer_id = 42)
+
+-- Both say "Index Scan". Only the buffer counts show that one of them
+-- walked the index in date order discarding other customers' rows.`},
+               {label:"Finding indexes nobody uses", lang:"sql", code:`select relname as table, indexrelname as index,
+       idx_scan as times_used,
+       pg_size_pretty(pg_relation_size(indexrelid)) as size
+from pg_stat_user_indexes
+where idx_scan = 0
+order by pg_relation_size(indexrelid) desc;
+
+-- Zero scans since the last stats reset. Check the reset time before
+-- dropping anything, and watch out for indexes that only back a
+-- constraint, which show no scans but are still doing a job.`} ],
+        tradeoff:`<p>More indexes make reads faster and writes slower, and the write cost is easy to forget because it is spread across every insert rather than concentrated in one slow query. A table with ten indexes does eleven writes per insert. The practical balance: index what your real query patterns need, review <code>pg_stat_user_indexes</code> periodically, and treat a new index on a hot write table as a change that needs measuring on both sides.</p>`,
+        pitfall:"Reading \"Index Scan\" in a plan as confirmation the index is right. It only means an index was used at all. Add BUFFERS and compare pages read: that is where a wrongly ordered index shows up.",
+        exercise:`<p>Take your slowest list endpoint. Run its query with <code>EXPLAIN (ANALYZE, BUFFERS)</code> and write down the pages read. Create the index with equality columns first and the sort column next, run it again, and compare. Then run the unused-index query above against a non-production copy and total the wasted space.</p>`,
+        refs:[ ["PostgreSQL: indexes","https://www.postgresql.org/docs/current/indexes.html"] ] },
+
+      { id:"query-plans", name:"Reading query plans",
+        depth:"build", core:true,
+        line:"The plan tells you what the database will do; ANALYZE tells you what it actually did.",
+        what:`<p><code>EXPLAIN</code> shows the plan the optimiser chose. <code>EXPLAIN ANALYZE</code> runs the query and shows what happened, which is the one you want, because the gap between estimated and actual rows is the single most useful diagnostic in the output.</p>
+              <p>You read a plan from the inside out: the most indented nodes run first and feed their parents.</p>`,
+        use:`<p>A report that ran in 200ms starts taking 40 seconds after a data load. The plan shows a nested loop join with an estimate of 12 rows and an actual of 400,000. The optimiser chose a strategy that is correct for 12 rows and catastrophic for 400,000, because the statistics were stale. The fix is <code>ANALYZE</code>, and you would never have guessed it from the query text.</p>`,
+        concepts:[
+          ["Estimated versus actual","Every node shows both. A large gap means the statistics are wrong, and every decision above that node was made on bad information."],
+          ["Scan types","Sequential scan reads the table; index scan seeks then fetches rows; index-only scan never touches the table; bitmap scan collects matches then reads pages in order."],
+          ["Join strategies","Nested loop is right for a few rows and terrible for many. Hash join builds a table in memory. Merge join needs both sides sorted."],
+          ["Rows removed by filter","Work the database did and then discarded. A large number here points at a missing or wrongly ordered index."],
+          ["Buffers","Pages touched, split into cache hits and disk reads. The most honest measure of how much work a query really did."]
+        ],
+        how:`<p>Always use <code>EXPLAIN (ANALYZE, BUFFERS)</code> on a realistic data volume; a plan from an empty development database tells you nothing, because the optimiser will choose a sequential scan for a hundred rows and should. Then scan for three things in order: the biggest gap between estimated and actual, the node with the largest actual time, and any large "rows removed by filter".</p>`,
+        code:[ {label:"Postgres: a sequential scan, and why", lang:"sql", code:`explain (analyze, costs off, timing off, buffers)
+select count(*) from orders where total_cents > 499000;
+
+--  Aggregate (actual rows=1 loops=1)
+--    ->  Seq Scan on orders (actual rows=94 loops=1)
+--          Filter: (total_cents > 499000)
+--          Rows Removed by Filter: 49906
+
+-- 94 rows wanted, 49,906 examined and thrown away. That ratio is the
+-- case for an index. Note it is still the right plan today if the
+-- table is small enough that reading it all is cheaper than seeking.`} ],
+        tradeoff:`<p>Reading plans by eye is fine for one slow query and does not scale to finding slow queries. Use <code>pg_stat_statements</code> to rank queries by total time, which is what actually hurts: a 5ms query run two million times costs far more than a 3-second report run nightly, and only the aggregate view shows you that. Read plans once the ranking has told you which query to read.</p>`,
+        pitfall:"Running EXPLAIN ANALYZE on a development database with a thousand rows and concluding the query is fine. Plans change with data volume and with statistics, so a plan taken against unrepresentative data is not evidence about production.",
+        exercise:`<p>Enable <code>pg_stat_statements</code> on a non-production copy, generate realistic traffic, and list the top five queries by total execution time. Take the first one, run <code>EXPLAIN (ANALYZE, BUFFERS)</code>, and write down its estimated versus actual rows at every node. Then run <code>ANALYZE</code> on its tables and see whether the estimates move.</p>`,
+        refs:[ ["PostgreSQL: using EXPLAIN","https://www.postgresql.org/docs/current/using-explain.html"] ] },
+
+      { id:"transactions", name:"Transactions and isolation anomalies",
+        depth:"build", core:true,
+        line:"Your default isolation level allows anomalies, and you should know which ones.",
+        what:`<p>A transaction makes several statements one unit: all of them apply or none do. That is the easy half. The hard half is isolation: what one transaction can see of another that is running at the same time. Databases offer several levels, each permitting a specific set of anomalies in exchange for speed.</p>
+              <p>The practical point is that the default is not the safest. On PostgreSQL the default is read committed, which permits non-repeatable reads, and most applications run on it without anyone having chosen it.</p>`,
+        use:`<p>A report reads a total, does some work, and reads it again to check consistency. Under read committed the second read can differ, because another transaction committed in between. The report is not buggy and the database is not broken; the isolation level permits exactly this, and the report needs repeatable read.</p>`,
+        concepts:[
+          ["Atomicity and durability","All statements commit or none do, and a committed transaction survives a crash. These are what people usually mean by \"transactional\"."],
+          ["Dirty read","Seeing another transaction's uncommitted changes. Not possible in PostgreSQL at any level."],
+          ["Non-repeatable read","Reading the same row twice in one transaction and getting different values. Permitted by read committed."],
+          ["Phantom read","Re-running a query and getting a different set of rows, because another transaction inserted matching ones."],
+          ["Serialization failure","At the strictest level the database may refuse to commit a transaction that would break serial ordering. Your code must catch it and retry."]
+        ],
+        how:`<p>Know your default and choose deliberately where it matters. Keep transactions short: a transaction holds locks and a snapshot for its whole life, so one that waits on an HTTP call is holding database resources for the duration of someone else's outage. Never start a transaction before user input, and never make a network call inside one.</p>`,
+        code:[ {label:"Postgres: the default, and what it allows", lang:"sql", code:`show default_transaction_isolation;
+--  read committed
+
+-- SESSION A                              -- SESSION B
+begin isolation level read committed;
+select balance from acct where id = 1;
+--  100
+                                          update acct set balance = 500
+                                           where id = 1;
+select balance from acct where id = 1;
+--  500      <- same query, same transaction, different answer
+commit;
+
+-- The same sequence at repeatable read:
+begin isolation level repeatable read;
+select balance from acct where id = 1;    --  100
+                                          update acct set balance = 900
+                                           where id = 1;
+select balance from acct where id = 1;    --  100   <- stable snapshot
+commit;`} ],
+        tradeoff:`<p>Read committed is the default because it is fast and good enough for the common case: each statement sees a fresh snapshot, so readers never block writers. Repeatable read gives one transaction a consistent view for its whole life, which is what reports and multi-step reads want, at the cost of serialization failures you have to retry. Serializable is correct by construction and makes concurrency genuinely safe, at the price of more aborts under contention. Raise the level for the specific transaction that needs it rather than globally.</p>`,
+        pitfall:"Holding a transaction open across a call to another service. The lock and the snapshot are held for as long as that call takes, so a slow payment provider turns into database contention, and a hung one turns into an outage in a table you never touched.",
+        exercise:`<p>Open two database sessions by hand. Reproduce the sequence above at read committed and watch the value change inside the transaction; then repeat it at repeatable read and watch it stay. Then find the longest-running transaction in a service you work on and check whether anything inside it makes a network call.</p>`,
+        refs:[ ["PostgreSQL: transaction isolation","https://www.postgresql.org/docs/current/transaction-iso.html"] ] },
+
+      { id:"locking", name:"Locking, deadlocks and lost updates",
+        depth:"build", core:false,
+        line:"Read, change in application code, write back: the most common way to lose data quietly.",
+        what:`<p>When two transactions change the same row, one of them has to wait. The database handles that with locks, and mostly you never notice. You notice in two cases: a deadlock, where two transactions each hold what the other wants, and a lost update, where no lock was taken at all and one change silently overwrites another.</p>
+              <p>Lost updates are the dangerous one, because nothing fails. No error, no warning, just a number that is wrong.</p>`,
+        use:`<p>Two support agents open the same order and each adjusts the total. Both read 100. One writes 110, the other writes 120. The final value is 120 and the first adjustment is gone, with no record that it ever happened. Both requests returned success.</p>`,
+        concepts:[
+          ["Row lock","Taken by <code>UPDATE</code> and by <code>SELECT ... FOR UPDATE</code>. Other writers to that row wait; plain readers do not."],
+          ["Lost update","Two transactions read, compute from what they read, and write. The second write is based on a value that is no longer true."],
+          ["Pessimistic locking","Lock the row when you read it, with <code>FOR UPDATE</code>. Correct and simple, and it serialises everyone touching that row."],
+          ["Optimistic locking","Read a version with the row, and make the write conditional on the version not having changed. No lock held while the user thinks."],
+          ["Deadlock","Two transactions take the same locks in opposite orders. The database detects the cycle and kills one with an error; the application must retry."]
+        ],
+        how:`<p>Prefer the fix that needs no lock at all: let the database do the arithmetic. <code>UPDATE ... SET balance = balance + 10</code> reads and writes atomically in one statement, and two concurrent copies both apply.</p>
+              <p>When the new value genuinely depends on application logic, choose by how long the gap is. A gap of milliseconds inside one request: <code>SELECT ... FOR UPDATE</code>. A gap that includes a human thinking: a version column, because you cannot hold a lock while someone is at lunch.</p>`,
+        code:[ {label:"Postgres: the bug, and the two fixes", lang:"sql", code:`-- LOST UPDATE: both sessions read 100 first.
+-- A: update acct set balance = 100 + 10 where id = 1;   -- app computed
+-- B: update acct set balance = 100 + 20 where id = 1;   -- app computed
+-- final balance: 120        <- A's +10 is gone, both returned success
+
+-- FIX 1: let the database compute. Both increments survive.
+-- A: update acct set balance = balance + 10 where id = 1;
+-- B: update acct set balance = balance + 20 where id = 1;
+-- final balance: 130
+
+-- FIX 2: optimistic locking, when the value needs application logic.
+update doc set body = 'from A', version = version + 1
+ where id = 1 and version = 1;        -- UPDATE 1: this one won
+
+update doc set body = 'from B', version = version + 1
+ where id = 1 and version = 1;        -- UPDATE 0: stale, reload and retry`},
+               {label:"A real deadlock", lang:"text", code:`-- A: update acct set balance = balance - 1 where id = 1;
+-- B: update acct set balance = balance - 1 where id = 2;
+-- A: update acct set balance = balance + 1 where id = 2;   (waits for B)
+-- B: update acct set balance = balance + 1 where id = 1;   (waits for A)
+
+ERROR:  deadlock detected
+DETAIL:  Process 2998 waits for ShareLock on transaction 822;
+         blocked by process 2999.
+         Process 2999 waits for ShareLock on transaction 821;
+         blocked by process 2998.
+
+Both transactions touched the same two rows in opposite orders. Always
+taking rows in a fixed order, such as ascending id, makes this cycle
+impossible to form.`} ],
+        tradeoff:`<p>Pessimistic locking is easy to reason about and serialises access, so under contention everyone queues and throughput drops. Optimistic locking lets everyone proceed and fails the losers, which is better when conflicts are rare and worse when they are common, because the retries add load exactly when the system is already busy. Pick by conflict rate: rare conflicts, optimistic; hot row, pessimistic; and consider whether the operation can be made an atomic single statement instead, which beats both.</p>`,
+        pitfall:"Treating a deadlock error as a database fault to be escalated. It is a normal outcome of concurrent access, and the correct response is to retry the transaction, plus fix the lock ordering so the cycle cannot form.",
+        exercise:`<p>Open two sessions and reproduce all three: the lost update that ends at 120, the atomic version that ends at 130, and the deadlock. Then search your codebase for a read, a computation, and a write to the same row, and convert one of them to either an atomic statement or a version check.</p>`,
+        refs:[ ["PostgreSQL: explicit locking","https://www.postgresql.org/docs/current/explicit-locking.html"] ] },
+
+      { id:"db-pooling", name:"Connection pooling and pool exhaustion",
+        depth:"build", core:false,
+        line:"Your pool size is your real concurrency limit, and exhaustion looks like slowness, not errors.",
+        what:`<p>A database connection is expensive to create and, on PostgreSQL, is backed by a process on the server. So applications keep a pool of them. That pool is a hard limit on how many queries you can run at once, which makes it one of the most important numbers in your system and one almost nobody can quote.</p>
+              <p>When it runs out, requests do not fail. They wait. Latency climbs, nothing errors, and the cause is invisible from the outside.</p>`,
+        use:`<p>Latency triples under load while the database shows 20% CPU and the application shows low CPU too. Nothing is working hard, because everything is waiting: ten instances with a pool of twenty each is two hundred connections against a server configured for one hundred, so half the pool checkouts are queueing somewhere.</p>`,
+        concepts:[
+          ["Pool size as a concurrency limit","Your service can run exactly as many simultaneous queries as it has connections. Everything else queues inside the process."],
+          ["Multiply by instances","Each instance has its own pool. The database sees pool size times instance count, which is the number that must fit under its limit."],
+          ["Acquisition timeout","How long a request waits for a connection before failing. Without one, requests pile up until something else breaks."],
+          ["Leaks","A connection not returned, usually on an error path, is gone for good. A pool that shrinks over hours until everything stalls is a leak."],
+          ["External poolers","pgbouncer multiplexes many clients onto few server connections. In transaction mode it breaks anything that relies on session state, including prepared statements and session-level advisory locks."]
+        ],
+        how:`<p>Pick the size from arithmetic, not habit. The database's maximum connections, minus headroom for migrations and an administrator, divided by the maximum number of instances you will run, is your ceiling per instance. Then check it against what you actually need: concurrency equals throughput times query time, so 200 requests a second each holding a connection for 20ms needs about four.</p>
+              <p>Always set an acquisition timeout, and emit two metrics: connections in use and time spent waiting for one. The second is the one that tells you the pool is the bottleneck.</p>`,
+        code:[ {label:"The arithmetic, with real numbers", lang:"text", code:`Database max_connections         100
+Reserve for admin and migrations  -10
+Available                          90
+Maximum instances (incl. deploy)   10   <- a rolling deploy runs 2 versions
+Pool size per instance              9
+
+Sanity check from the other side:
+  throughput x query time = concurrent queries needed
+  200 req/s x 0.02 s      = 4
+
+Pool of 9 is comfortable. A pool of 50 would not make it faster; it
+would let 500 connections queue at a database that accepts 100.`} ],
+        tradeoff:`<p>A bigger pool absorbs bursts and raises the load the database must absorb; a smaller one queues requests inside your process where you can see and bound the wait. Smaller is usually right: a database at its connection limit degrades for everyone, while a queue inside your service degrades only you and is visible in a metric. If you genuinely need many more connections than the server allows, that is what a transaction-mode pooler is for, with the session-state caveat above.</p>`,
+        pitfall:"Raising the pool size in response to slowness. It moves the queue from your process to the database, where it is harder to see and affects every other service sharing that server.",
+        exercise:`<p>Find the three numbers for a service you work on: the database's maximum connections, your pool size, and your maximum instance count. Multiply the last two and compare with the first. Then add a metric for time spent waiting to acquire a connection, run a load test, and watch when it becomes non-zero.</p>`,
+        refs:[ ["PostgreSQL: connection settings","https://www.postgresql.org/docs/current/runtime-config-connection.html"] ] },
+
+      { id:"migrations", name:"Zero-downtime schema migrations",
+        depth:"build", core:false,
+        line:"Old code and new schema run together during every deploy, so every change must suit both.",
+        what:`<p>During a rolling deploy, old and new instances run at once against one database. Any migration that only works with the new code breaks the old instances while they are still serving traffic. The way out is expand and contract: make the schema compatible with both versions, deploy the code, then remove the old shape in a later release.</p>`,
+        use:`<p>You rename <code>name</code> to <code>full_name</code> in one migration. The moment it runs, every instance still on the old code throws on every read, and they are serving most of your traffic because the new ones have not rolled out yet. The outage lasts until the deploy finishes, and the rollback is worse, because the column is already gone.</p>`,
+        concepts:[
+          ["Expand and contract","Add the new, write both, migrate readers, stop writing the old, remove it. Five steps across at least three releases."],
+          ["Separate schema from code","A migration deploys on its own, before the code that needs it. Then the code deploy is reversible without touching the schema."],
+          ["Backwards-compatible first","Adding a nullable column or a new table is always safe. Removing, renaming or tightening is never safe in one step."],
+          ["Lock duration","Some changes take a lock that blocks writes for as long as they take. On a large table that is an outage with a migration as its cause."],
+          ["Backfill separately","Updating millions of rows inside the migration holds one enormous transaction. Backfill in batches, afterwards, outside the migration."]
+        ],
+        how:`<p>Know which operations are cheap and which rewrite the table. On PostgreSQL 11 and later, adding a column with a constant default is metadata only, and adding <code>NOT NULL</code> with no default fails outright on a populated table. Building an index takes a lock that blocks writes unless you ask for the concurrent version.</p>`,
+        code:[ {label:"Postgres: what each operation really costs", lang:"sql", code:`-- Fails immediately: existing rows would violate it.
+alter table orders add column region text not null;
+-- ERROR:  column "region" of relation "orders" contains null values
+
+-- Metadata only on PG 11+, even with 50,000 rows present.
+alter table orders add column region text not null default 'unknown';
+-- Time: 2.353 ms
+select count(*) from orders where region = 'unknown';   -- 50000
+
+-- A plain index build takes ShareLock, which blocks writes for the
+-- whole build. On a large table that is a write outage.
+create index idx on orders (status);
+
+-- CONCURRENTLY does not block writes. It cannot run inside a
+-- transaction, it is slower, and a failure leaves an INVALID index
+-- behind that must be dropped before retrying.
+create index concurrently idx on orders (status);`},
+               {label:"Renaming a column without downtime", lang:"text", code:`Release 1   migration: add full_name (nullable)
+            code:      write BOTH name and full_name, read name
+            then:      backfill full_name in batches of ~5,000
+
+Release 2   code:      read full_name, still write both
+            verify:    no reads of name in logs or query stats
+
+Release 3   code:      stop writing name
+Release 4   migration: drop name
+
+Each release is independently deployable and independently revertible.
+Collapsing it into two is how the outage in this topic happens.`} ],
+        tradeoff:`<p>Expand and contract is four releases for what feels like a one-line change, and teams skip it because the one-line version usually works: deploys are fast, traffic is low, nobody notices. The time it does not work is during an incident, when a rollback is needed and the old code no longer matches the schema. Use the full sequence for anything on a table that matters, and allow yourself the shortcut only where you can state what happens if the deploy has to be reverted halfway.</p>`,
+        pitfall:"Backfilling inside the migration. A single UPDATE over millions of rows holds one transaction for minutes, blocks writers behind it, and bloats the table, and if it times out it rolls back entirely and you start again.",
+        exercise:`<p>Plan a real column rename on a table you own as four releases, writing the exact migration and code change for each. Then run the first migration against a copy and time it. Separately, build an index on that table both ways and watch whether concurrent writes block, which is the difference the concurrent version buys.</p>`,
+        refs:[ ["PostgreSQL: ALTER TABLE","https://www.postgresql.org/docs/current/sql-altertable.html"], ["PostgreSQL: CREATE INDEX CONCURRENTLY","https://www.postgresql.org/docs/current/sql-createindex.html"] ] },
+
+      { id:"orm-n-plus-one", name:"ORMs and the N+1 problem",
+        depth:"build", core:false,
+        line:"The query you did not write is the one that runs a thousand times.",
+        what:`<p>An ORM maps rows to objects and removes a great deal of boilerplate. It also hides when a query happens, and that is where the trouble is: touching a related object inside a loop issues a query per iteration. One query becomes a hundred, each fast, totalling far more than a single join.</p>
+              <p>This is not an argument against ORMs. It is an argument for knowing what each line costs.</p>`,
+        use:`<p>A page listing fifty orders with the customer name takes 900ms in production and 40ms locally. Locally there are three orders. The code is a loop over orders reading <code>order.customer.name</code>, which is fifty-one queries: one for the list and one per row.</p>`,
+        concepts:[
+          ["Lazy loading","A relation is fetched when first touched. Convenient, and it means a property access is a network round trip you cannot see in the code."],
+          ["Eager loading","Ask for the relations up front, as a join or a second query with an <code>IN</code> clause. Two queries instead of fifty-one."],
+          ["The join explosion","Eagerly loading several one-to-many relations in one join multiplies rows: 50 orders with 10 items and 5 events is 2,500 rows for 50 objects. Separate queries are better here."],
+          ["Projection","Most endpoints need a few columns, not whole entities. Selecting into a small shape avoids loading and mapping everything."],
+          ["The escape hatch","Every ORM lets you write SQL. For a complex report, that is the right answer, not a defeat."]
+        ],
+        how:`<p>Make the invisible visible: log every query with its duration in development, and count queries per request. The bug is obvious the moment the count is on screen and impossible to notice otherwise.</p>
+              <p>Then fix it by loading what the view needs in one step. Most ORMs offer both strategies, and the choice between join and separate query is the explosion above: one-to-one relations join cleanly, and collections are usually better fetched separately.</p>`,
+        code:[ {label:"What the loop actually runs", code:`orders = Order.where(status: "paid").limit(50)      # 1 query
+for order in orders:
+    print(order.customer.name)                      # 1 query, 50 times
+                                                    # total: 51
+
+# Eager, as a join: good for a one-to-one relation.
+orders = Order.where(status: "paid").include(:customer).limit(50)
+#   SELECT ... FROM orders JOIN customers ON ...    total: 1
+
+# Eager, as a second query: better for collections, no row explosion.
+#   SELECT ... FROM orders WHERE status = 'paid' LIMIT 50
+#   SELECT ... FROM order_items WHERE order_id IN (...)
+#                                                   total: 2
+
+# And the test that stops it coming back:
+assert_queries(2) do
+    render_order_list
+end`} ],
+        tradeoff:`<p>An ORM is worth it for the ninety percent of queries that are simple reads and writes of whole entities, where it removes real tedium and real mapping bugs. It stops being worth it for reporting, bulk operations and anything with a window function or a lateral join, where the generated SQL is worse than what you would write and harder to read. Use both deliberately: the ORM for entity access, hand-written SQL for the queries that are the product.</p>`,
+        pitfall:"Fixing an N+1 by eagerly loading every relation everywhere. You trade fifty small queries for one enormous join that returns thousands of duplicated rows and loads columns the page never shows.",
+        exercise:`<p>Turn on query logging and open the three heaviest pages in an application you work on. Count the queries each issues. Fix the worst one with eager loading, confirm the count drops, and then add a test that asserts the query count, because the next refactor will reintroduce it otherwise.</p>`,
+        refs:[] }
+
+    ],
+    after:[
+      ["Write the query first","Joins, grouping and a window function for the latest row per group, without a reference."],
+      ["Model facts once","One fact in one place, with snapshots where history matters and drift detection where you duplicate."],
+      ["Make the database enforce the rules","Not-null, unique, foreign key and check constraints that no code path can bypass."],
+      ["Index for the query, not the column","Equality first, then the sort, proved with buffer counts rather than plan shape."],
+      ["Read a plan","Estimated versus actual, rows removed by filter, and where the time went."],
+      ["Choose an isolation level","You know your default, what it permits, and which transactions need more."],
+      ["Stop losing updates","Atomic statements where possible, a version column where not, and fixed lock ordering."],
+      ["Size a pool","From max_connections, instance count and query time, with a wait metric to prove it."],
+      ["Migrate without downtime","Expand and contract, backfills in batches, and indexes built concurrently."],
+      ["Count your queries","You can spot an N+1 from a query log and stop it returning with a test."]
+    ],
+    sources:`<p>Verified while writing, against a live PostgreSQL 16.15 in this container, on a 50,000-row orders table: the window function result, the two index-order plans and their buffer counts (62 pages versus 25, with the plan shape identical, which is why this topic argues against reading the plan shape alone), the sequential scan with 49,906 rows removed by filter, <code>default_transaction_isolation</code> reading <code>read committed</code>, the non-repeatable read and its absence at repeatable read, the lost update ending at 120 and the atomic version ending at 130, the optimistic-locking update affecting zero rows, a genuine deadlock with the error text quoted verbatim, the failure of <code>ADD COLUMN ... NOT NULL</code> on a populated table, the 2.353ms metadata-only add with a default, and the <code>ShareLock</code> taken by a plain <code>CREATE INDEX</code>.</p>
+      <p>One planned claim did not survive testing and was rewritten: a wrongly ordered index does not stop Postgres using the index. It still performs an index scan and filters within it, so the difference shows up in pages read rather than in the plan shape. The topic says that instead.</p>
+      <p>References, not retrieved while writing: the PostgreSQL documentation pages linked from each topic.</p>` }
 ];
 
 const DEPTH = { understand:"Understand", build:"Build" };
