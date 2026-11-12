@@ -4293,7 +4293,209 @@ terraform apply tf.plan      # apply exactly what was reviewed,
     ],
     sources:`<p>Verified by running, in this container: the PID 1 signal demonstration. With <code>exec</code> the process receives SIGTERM and drains; without it the shell is terminated and the application keeps running, which in a container means the drain never happens and the orchestrator force-kills it after the grace period.</p>
       <p>Not validated here, and labelled as such in the page: the Dockerfile, the Kubernetes manifests and the <code>kubectl</code> commands. This container has a Docker client with no daemon and no cluster, so these are worked examples to adapt rather than files that were built and applied.</p>
-      <p>References, not retrieved while writing: the Docker best practices page and the Kubernetes documentation on Deployments and on resource management.</p>` }
+      <p>References, not retrieved while writing: the Docker best practices page and the Kubernetes documentation on Deployments and on resource management.</p>` },
+
+{ num:15, id:"distributed", phase:6, name:"Distributed systems you'll actually meet",
+    intro:"The handful of distributed ideas that change decisions in an ordinary backend.",
+    topics:[
+
+      { id:"service-boundaries", name:"Monolith, services and the distributed-monolith trap",
+        depth:"understand", core:true,
+        line:"Splitting a system does not remove coupling; it converts it into network calls you cannot refactor.",
+        what:`<p>A well-structured monolith is the correct default and is not an embarrassing starting point. Services are worth their cost when teams need to deploy independently, when parts of the system have genuinely different scaling or availability needs, or when a boundary is stable enough to be worth freezing into a network interface.</p>
+              <p>Splitting for any other reason usually produces a distributed monolith: all the operational cost of services with none of the independence.</p>`,
+        use:`<p>A team splits a system into six services. Every deploy requires coordinating three of them, because they share a database and a release train. A single user action makes four synchronous hops, so availability is now the product of four numbers instead of one, and debugging requires correlating logs across four codebases. Nothing was decoupled; the function calls became network calls.</p>`,
+        concepts:[
+          ["Modular monolith","One deployable with real internal boundaries: separate modules, no reaching into another module's tables, interfaces between them. Most of the benefit, almost none of the cost."],
+          ["Vertical then horizontal","A bigger machine is the cheapest scaling there is, and it runs out. Horizontal scaling needs statelessness, which the foundations stage covered, and it is unbounded."],
+          ["Data ownership","The real boundary test. If two services write the same tables, they are one service with a deployment problem."],
+          ["The distributed monolith","Services that must deploy together, share a database, or form a synchronous chain for every request. The failure mode this topic exists to name."],
+          ["Availability multiplies","Four services at 99.9% in a synchronous chain give roughly 99.6%. Every added hop lowers the ceiling, before anything goes wrong."]
+        ],
+        how:`<p>Draw boundaries around data ownership, not around nouns or team structure. Before extracting a service, make the boundary real inside the monolith first: a module that owns its tables and is reached only through an interface. If that is painful to do in one codebase, it will be much worse over a network.</p>
+              <p>Then check the deploy test: if the new service can be released without releasing anything else, the boundary is real. If not, you have added a network call and kept the coupling. The planned system design track goes further into decomposition; this topic is the part that changes everyday decisions.</p>`,
+        code:[ {label:"The questions, before splitting anything", lang:"text", code:`1. Can it be deployed alone?
+     If releasing it requires releasing something else, the boundary
+     is not real yet.
+
+2. Does it own its data?
+     Two services writing the same tables are one service. Shared
+     database, shared schema migration, shared outage.
+
+3. Is the call synchronous and on the critical path?
+     4 services at 99.9% in a chain -> ~99.6% available, before any
+     bug. Each hop also adds its latency and its timeout.
+
+4. Is there a team boundary that matches?
+     Independent deployment is worth most when independent people
+     are doing the deploying.
+
+Fewer than three yes answers: make it a module in the monolith. The
+module is reversible in an afternoon; the service is not.`} ],
+        tradeoff:`<p>Services buy independent deployment, independent scaling, fault isolation and technology choice, and they cost a network between every component: partial failure, distributed debugging, data consistency across boundaries, and an operational surface multiplied by the service count. A modular monolith gives you most of the structural benefit for one deployment, one database, one place to look, and it keeps extraction available later. The decision is rarely about size and almost always about how many independent teams need to ship without coordinating.</p>`,
+        pitfall:"Extracting a service that keeps using the original database. It is the worst of both: the operational cost of a separate deployment, a network hop in the middle, and none of the independence, because the schema is still shared and so is every migration.",
+        exercise:`<p>Take a system you work on and draw which component writes which tables. Every table with more than one writer is a boundary violation. Then pick one service and answer the four questions above honestly; if it scores below three, write down what would have to change for it to be worth its cost.</p>`,
+        refs:[] },
+
+      { id:"sharding", name:"Horizontal scaling, sharding and partition keys",
+        depth:"understand", core:false,
+        line:"The last resort, and the partition key is a decision you cannot easily take back.",
+        what:`<p>Sharding splits one logical dataset across several databases, each holding a subset. It removes the single-machine ceiling on writes and storage, and it costs you cross-shard queries, cross-shard transactions, and a rebalancing problem.</p>
+              <p>It is genuinely a last resort. Indexing, caching, read replicas and archiving old data solve far more cases, and all of them are reversible.</p>`,
+        use:`<p>A multi-tenant system shards by tenant id, which is the natural key. One customer grows to forty times the size of any other, so their shard saturates while the rest idle. Adding shards does not help, because that tenant's data cannot be split further under this key. The scaling problem is now a schema problem.</p>`,
+        concepts:[
+          ["Try everything else first","Indexes, query fixes, caching, replicas for reads, archiving cold data, and a bigger machine. Each is reversible; sharding is not."],
+          ["The partition key","Decides which shard a row lives on. Choose it so the queries you run most can be answered from one shard."],
+          ["Cross-shard queries","Anything not filtered by the partition key must ask every shard and merge. Joins and aggregates across shards are the cost you are accepting."],
+          ["Skew","A key whose values are unevenly distributed gives you one hot shard. Tenant id is the classic example, because customers differ enormously in size."],
+          ["Consistent hashing","A placement scheme where adding a node moves only the keys it takes over, rather than almost all of them."]
+        ],
+        how:`<p>Pick the key from your dominant access pattern, and accept that everything else becomes expensive. Then plan the rebalance before you need it, because that is the part people leave until it is urgent. Modulo placement is the obvious scheme and is close to the worst one: adding a node reshuffles nearly everything.</p>`,
+        code:[ {label:"Adding a fifth node to four, 10,000 keys", lang:"text", code:`modulo hashing       7963 keys move  (79.6%)
+consistent hashing   1905 keys move  (19.1%)
+ideal minimum        2000 keys       (20.0%)
+
+With modulo, node = hash(key) % N, so changing N changes the answer
+for almost every key: a resharding is a near-total data movement,
+during which the cluster is both busy and inconsistent.
+
+Consistent hashing places nodes and keys on a ring and sends each key
+to the next node clockwise. Adding a node takes over only the arc
+between it and its predecessor, which is why only the keys that must
+move, move. Virtual nodes (150 per real node here) smooth the arcs
+so one node does not get an unlucky share.
+
+Measured on 10,000 keys with MD5 over the key space.`} ],
+        tradeoff:`<p>A coarse partition key such as tenant keeps each tenant's data together, so almost every query hits one shard, and it gives you skew whenever customers differ in size. A fine key such as a hash of the row id distributes evenly and makes any query that is not by that key hit every shard. There is no key that is good for both, which is why this decision is hard: pick for your dominant read pattern, and plan separately for the largest tenant, who will eventually need their own shard whatever you choose.</p>`,
+        pitfall:"Sharding before exhausting the single-node options. A correctly indexed Postgres instance on modern hardware handles far more than most teams assume, and sharding is a structural change that makes every later query and every later migration harder.",
+        exercise:`<p>Before considering sharding, write down your largest table's size, your write rate, and the largest instance available to you. Most teams find they have an order of magnitude of headroom. If you genuinely do not, write the three most common queries and check whether a single candidate key can answer all three from one shard.</p>`,
+        refs:[] },
+
+      { id:"consistency-models", name:"Consistency models and what eventual consistency costs you",
+        depth:"understand", core:false,
+        line:"Eventually consistent means a user can read something that contradicts what they just did.",
+        what:`<p>With one database, a write is visible to the next read and nobody thinks about it. Add a replica, a cache, a search index or a second service, and that stops being automatic. Consistency models are the vocabulary for what a reader is guaranteed to see.</p>
+              <p>The cost of a weaker model is not abstract. It is a specific list of things a user can observe, and each one is a bug report if you did not plan for it.</p>`,
+        use:`<p>A user updates their display name and the page still shows the old one, so they change it again. The write went to the primary, the read came from a replica thirty milliseconds behind. Nothing is broken, the system is behaving exactly as designed, and the user has just created a duplicate edit and a support ticket.</p>`,
+        concepts:[
+          ["Strong consistency","Every read sees the latest committed write. What a single database gives you, and what costs coordination once there is more than one."],
+          ["Eventual consistency","Reads converge if writes stop. No guarantee about when, and no guarantee that two readers see the same thing meanwhile."],
+          ["Read-your-writes","A reader sees their own writes. The weakest guarantee users actually notice, and the one worth buying even when you accept staleness elsewhere."],
+          ["Monotonic reads","You never see time go backwards. Without it, two refreshes hitting different replicas can show new data then old data."],
+          ["CAP, briefly","During a network partition you choose between answering with possibly stale data and refusing to answer. The theorem is narrow and the trade-off is real; the useful version is that partitions happen and you should know which you chose."]
+        ],
+        how:`<p>Decide per read path, not globally. Anything a user has just written reads from the primary. Reporting, search and analytics read from wherever is cheapest and are allowed to lag. Where staleness is visible, show it, with a last-updated time, rather than presenting stale data as current.</p>
+              <p>Then measure the lag and alert on it, because the whole model assumes "eventually" is short, and nothing tells you when it stops being.</p>`,
+        code:[ {label:"What each model lets a user see", lang:"text", code:`strong            read after write -> new value. Always.
+                  Costs coordination; with one primary you have it
+                  free, and you lose it the moment you add a cache.
+
+read-your-writes  YOUR reads see YOUR writes. Others may lag.
+                  Usually enough, and cheap: route a user to the
+                  primary for a short window after they write.
+
+monotonic reads   you never see older data than you already saw.
+                  Without it: refresh shows new, refresh again shows
+                  old, because the two reads hit different replicas.
+
+eventual          converges if writes stop. Says nothing about when,
+                  and allows every anomaly above.
+
+Multi-region makes all of this harder, because the cheapest write
+path and the cheapest read path are now in different places and the
+latency between them is tens of milliseconds at best. It is a real
+technique and a large commitment, and most services never need it.`} ],
+        tradeoff:`<p>Strong consistency everywhere is simple to reason about and puts all read load on the primary, which is the thing you were trying to relieve. Eventual consistency scales and hands you a list of anomalies to design around. The practical middle is almost always read-your-writes: route a user to the primary for a few seconds after they write, and let everything else lag. It removes the anomaly users actually notice and keeps most of the benefit, for the cost of a flag in the session.</p>`,
+        pitfall:"Deciding consistency once, globally, in the data access layer. The right answer differs per read: a checkout total and a monthly report have nothing in common, and a single setting is wrong for one of them.",
+        exercise:`<p>List your read paths and mark each as must-be-fresh or may-lag. For every must-be-fresh one, check where it actually reads from today. Then find a page that reads immediately after a write and test it against a replica with artificial lag: if it shows stale data, that is a bug your users have already met.</p>`,
+        refs:[] },
+
+      { id:"replication-quorum", name:"Replication, leader election and quorum as things you operate",
+        depth:"understand", core:false,
+        line:"You configure and watch these; you do not implement them. Know what the settings cost.",
+        what:`<p>Replication, failover and consensus are built into the databases and queues you already run. You are not going to write Raft. You are going to choose a replication mode, set a replica count, and one day watch a failover happen, and those decisions have consequences worth understanding.</p>`,
+        use:`<p>A primary fails. The replica was replicating asynchronously and was 200ms behind, so it is promoted and the last few seconds of committed transactions are gone. The orders were acknowledged to customers and no longer exist. Nothing malfunctioned: asynchronous replication is defined to allow exactly this, and it was chosen by whoever set it up.</p>`,
+        concepts:[
+          ["Asynchronous replication","The primary commits without waiting. Fast writes, and a failover can lose whatever had not been shipped yet."],
+          ["Synchronous replication","The primary waits for a replica to confirm. No loss on failover, and every write pays a round trip, so a slow replica slows all writes."],
+          ["Failover and split-brain","Promoting a replica when the primary looks dead. If the old primary is alive but unreachable, two nodes accept writes and the data diverges."],
+          ["Quorum","Requiring a majority. It is why clusters have odd numbers, and why a two-node cluster is worse than one node: it cannot form a majority after losing either."],
+          ["Consensus in practice","Raft or Paxos underneath etcd, Kafka's controller and most managed databases. What you operate are its symptoms: elections, leader changes, and the pauses during them."]
+        ],
+        how:`<p>Choose the replication mode from what a failover may lose, and write that number down as your real recovery point objective rather than the backup schedule's. Use an odd number of nodes so a majority is always possible. Then rehearse a failover deliberately, in a non-production environment, and time it, because the first time you see one should not be during an incident.</p>`,
+        code:[ {label:"Why clusters have odd numbers", lang:"text", code:`quorum = floor(N / 2) + 1
+
+  N=1   quorum 1   survives 0 failures
+  N=2   quorum 2   survives 0 failures   <- worse than one node:
+                                            twice the failure surface,
+                                            no extra tolerance
+  N=3   quorum 2   survives 1
+  N=4   quorum 3   survives 1            <- no gain over 3, more cost
+  N=5   quorum 3   survives 2
+
+Even numbers never buy tolerance, only cost. Hence 3 and 5.
+
+Split-brain is what quorum prevents: a partitioned minority cannot
+form a majority, so it cannot accept writes, so it cannot diverge.
+A two-node cluster has no majority after a partition, which is why
+it is the worst configuration available.`} ],
+        tradeoff:`<p>Asynchronous replication is the default almost everywhere because it keeps writes fast and the window of possible loss is usually milliseconds. Synchronous replication closes that window and makes every write depend on a second machine, so a slow or restarting replica becomes a write outage. The middle ground most databases offer is to require one confirmation out of several replicas, which bounds the loss without making any single replica critical. Choose it by asking what losing three seconds of writes would actually cost, which is a question for the business, not for the database.</p>`,
+        pitfall:"Running a two-node cluster for high availability. It cannot form a quorum after losing either node, so it is strictly less available than a single node while costing twice as much and being more complex to operate.",
+        exercise:`<p>Find out, for your main database, whether replication is synchronous and how far behind the replica typically runs. That number is how much data a failover would lose. Then trigger a failover in a non-production copy and time how long writes are refused. Both numbers usually surprise people.</p>`,
+        refs:[] },
+
+      { id:"clocks-ordering", name:"Clocks, ordering and why timestamps lie",
+        depth:"understand", core:false,
+        line:"Two machines never agree on the time, so a timestamp is not an ordering.",
+        what:`<p>It is tempting to order events by their timestamps. Across machines this does not work: clocks drift, they are corrected in jumps, and they can move backwards. An event genuinely later than another can carry an earlier timestamp, and nothing detects it.</p>
+              <p>There is also a second clock on every machine, which most people never use and which is the right one for measuring durations.</p>`,
+        use:`<p>Two services write to the same record and the application keeps whichever has the later <code>updated_at</code>. The services' clocks differ by 80ms. The genuinely later write carries the earlier timestamp and is silently discarded. There is no error and no way to notice, because the record looks perfectly consistent afterwards.</p>`,
+        concepts:[
+          ["Wall clock","The time of day. Synchronised by NTP, corrected in steps, can jump forwards or backwards. Right for recording when something happened; wrong for ordering or measuring."],
+          ["Monotonic clock","A counter that only increases and is unaffected by corrections. The correct clock for a duration, a timeout or a lease, and it is meaningless across machines."],
+          ["Skew","The difference between two machines' clocks. Typically milliseconds with good NTP, and occasionally much worse after a restart or a failure."],
+          ["Last-write-wins","Resolving conflicts by timestamp. It silently discards data whenever the clocks disagree, which is always, to some degree."],
+          ["Logical ordering","A sequence number or a version from a single authority, which orders events without reference to any clock. The reliable answer."]
+        ],
+        how:`<p>Use the monotonic clock for every duration, timeout, retry delay and lease. Use the wall clock only for recording and displaying when something happened, always in UTC, as the serialization topic says.</p>
+              <p>For ordering, use something with a single source: a database sequence, a version column, or a per-partition offset. If you must compare timestamps across machines, allow a tolerance larger than your worst observed skew, and treat anything inside that window as unordered rather than guessing.</p>`,
+        code:[ {label:"Which clock, and when", lang:"js", code:`// Wrong: a duration measured with the wall clock. An NTP correction
+// during the request can make this negative, or wildly large.
+const t0 = Date.now();
+await doWork();
+const elapsed = Date.now() - t0;          // can be negative
+
+// Right: the monotonic clock. Unaffected by corrections, and
+// meaningless on any other machine, which is fine for a duration.
+const t0 = performance.now();
+await doWork();
+const elapsed = performance.now() - t0;   // always >= 0
+
+// Token expiry is the common place skew bites: a token issued by a
+// machine 2 seconds ahead looks not-yet-valid to a machine behind it.
+// Every JWT library has a tolerance setting for exactly this.
+jwt.verify(token, key, { clockTolerance: 5 });   // seconds
+
+// Ordering: do not compare timestamps from different machines.
+//   wrong:  if (a.updated_at > b.updated_at) keep(a)
+//   right:  if (a.version    > b.version)    keep(a)
+// where version comes from one authority: a sequence, a row version,
+// or the partition offset from the messaging stage.`} ],
+        tradeoff:`<p>Last-write-wins by timestamp is simple, needs no coordination, and silently loses data in proportion to your clock skew, which you are not measuring. A version from a single authority is correct and requires that authority to be reachable, which reintroduces coordination. For a single database the version column is free and there is no reason not to use it. Across services, the honest options are to make one service the owner of each field, or to keep both values and resolve the conflict in the domain, rather than letting a clock decide.</p>`,
+        pitfall:"Using the wall clock to measure how long something took. An NTP correction mid-measurement produces a negative duration or an enormous one, which then poisons your latency metrics with impossible values.",
+        exercise:`<p>Check your codebase for durations measured with the wall clock and convert one to the monotonic clock. Then find any place that resolves a conflict by comparing timestamps from different machines, and work out what your actual clock skew is: most teams have never measured it and assume it is zero.</p>`,
+        refs:[] }
+
+    ],
+    after:[
+      ["Defend a boundary","Data ownership and the deploy test, rather than nouns or team names."],
+      ["Exhaust the alternatives","You can name what to try before sharding, and why the partition key is irreversible."],
+      ["State what a reader is guaranteed","Per read path, with read-your-writes bought where users would notice."],
+      ["Operate a cluster","Replication mode chosen from what a failover loses, odd node counts, failover rehearsed."],
+      ["Stop trusting timestamps","Monotonic for durations, a single authority for ordering, tolerance for skew."]
+    ],
+    sources:`<p>Computed while writing: the consistent hashing comparison. Over 10,000 keys, adding a fifth node to four moves 7,963 keys under modulo placement and 1,905 under consistent hashing with 150 virtual nodes per node, against an ideal minimum of 2,000. The quorum table is arithmetic.</p>
+      <p>References, not retrieved while writing: this stage deliberately cites no implementation of consensus, because the topic's position is that you operate these mechanisms rather than build them. The planned system design track is named as the place that goes further into decomposition.</p>` }
 ];
 
 const DEPTH = { understand:"Understand", build:"Build" };
