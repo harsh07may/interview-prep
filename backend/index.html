@@ -3478,7 +3478,268 @@ def deliver(subscription, event):
     ],
     sources:`<p>Verified by running, on Node 22 in this container: the webhook signature cases, where the re-serialisation failure is real and the payload shows three distinct causes in one body (whitespace removed, <code>4999.0</code> rendered as <code>4999</code>, and <code>\\u00e9</code> turned into a literal character), and the streaming comparison on a 77MB file, where buffered reading grew resident memory from 42MB to 119MB while streaming grew it to 74MB and does not grow with the file.</p>
       <p>My first attempt at the re-serialisation example was not a demonstration at all: the payload happened to be in canonical compact form, so it round-tripped byte-identically and the signature still matched. It was replaced with a payload that differs, which is what a real provider sends.</p>
-      <p>References, not retrieved while writing: the OWASP file upload and SSRF cheat sheets.</p>` }
+      <p>References, not retrieved while writing: the OWASP file upload and SSRF cheat sheets.</p>` },
+
+{ num:12, id:"reliability", phase:5, name:"Reliability and fault tolerance",
+    intro:"Everything you depend on will fail. Decide now what happens when it does.",
+    topics:[
+
+      { id:"timeouts-retries", name:"When a dependency fails: timeouts, retries, jitter and budgets",
+        depth:"build", core:true,
+        line:"The worst failure is the one that neither succeeds nor fails, and a retry storm is self-inflicted.",
+        what:`<p>A remote call has three outcomes, not two: success, failure, and no answer. The third is the dangerous one, because without a timeout your request waits indefinitely, holding a thread, a connection and the caller behind it. One slow dependency then stops the whole service, which is how a minor outage in a non-essential system takes down checkout.</p>
+              <p>Retries are the obvious response and the usual way a small problem becomes an outage, because they multiply load exactly when the dependency is already struggling.</p>`,
+        use:`<p>A recommendation service slows from 50ms to 20 seconds. Product pages have no timeout on that call, so every request holds a worker for 20 seconds, the pool fills, and the entire catalogue goes down because of an optional sidebar. A 200ms timeout with an empty fallback would have made it a missing sidebar.</p>`,
+        concepts:[
+          ["Every call has a deadline","No exceptions. A call without a timeout is a call that can hang forever, and the default in many clients is exactly that."],
+          ["Timeout budget","A caller's timeout must exceed the sum of what it waits for, and each hop's must be shorter than its caller's. Otherwise the caller gives up while work continues downstream."],
+          ["Retry only what is safe","Idempotent operations only. Retrying a non-idempotent write after a timeout is how a payment is taken twice, which is why idempotency keys exist."],
+          ["Exponential backoff with jitter","Double the wait each attempt, then randomise it. Without the randomness, every client that failed together retries together."],
+          ["Retry budget","A cap on retries as a fraction of total requests. Retries add load precisely when the dependency is failing, so an unbounded policy turns a blip into an outage."]
+        ],
+        how:`<p>Set a deadline on every outbound call, derived from the request's own deadline rather than a constant, so a call never outlives the caller waiting for it. Classify failures before retrying: a timeout or a 503 is worth another attempt, a 400 or a 422 never will be.</p>
+              <p>Then add jitter, which matters more than the backoff curve. The point of the delay is to spread load; without randomness, clients that failed at the same moment retry at the same moment, and you have rebuilt the stampede.</p>`,
+        code:[ {label:"Node: why jitter, not just backoff", lang:"js", code:`const noJitter   = (n) => Math.min(CAP, BASE * 2 ** n);
+const fullJitter = (n) => Math.random() * Math.min(CAP, BASE * 2 ** n);
+
+// attempt  no jitter   full jitter, 10 clients that failed together
+// 0         100ms
+// 1         200ms
+// 2         400ms
+// 3         800ms      4ms .. 711ms   e.g. 385, 4, 711, 457, 665, 263
+// 4        1600ms
+// 5        3200ms
+
+// Without jitter, those ten clients all retry at exactly 800ms, then
+// all at 1600ms. The backoff curve spaces out ONE client's attempts
+// and does nothing about the herd; the randomness is what spreads it.`},
+               {label:"The policy, as code", code:`def call_with_retries(fn, deadline, max_attempts=3):
+    for attempt in range(max_attempts):
+        remaining = deadline - now()
+        if remaining <= 0:
+            raise DeadlineExceeded()           # the caller has given up
+
+        try:
+            return fn(timeout = min(remaining, PER_ATTEMPT_TIMEOUT))
+        except (Timeout, ServerError, ConnectionError) as e:
+            if attempt == max_attempts - 1:    raise
+            if not retry_budget.allow():       raise   # shed, do not amplify
+            sleep(random() * min(CAP, BASE * 2 ** attempt))
+        except (BadRequest, Unprocessable):
+            raise                              # will never succeed
+
+# Deadlines compose downwards:
+#   client waits 3000ms
+#     -> your handler budget 2500ms
+#        -> payment call 1000ms, 2 attempts
+#        -> inventory call  500ms, 1 attempt
+# Each hop shorter than its caller, or you do work nobody is waiting for.`} ],
+        tradeoff:`<p>More retries raise the chance any one request eventually succeeds and raise the load on a struggling dependency, making it less likely that anyone's request succeeds. The resolution is the retry budget: allow retries up to a small fraction of normal traffic, say ten percent, and shed beyond that. It converts "retry until it works" into "retry while there is spare capacity to do so", which is the behaviour you actually want and the one a per-request policy cannot express.</p>`,
+        pitfall:"Retrying at several layers at once. The HTTP client retries three times, the service wrapper retries three times, and the caller retries three times, so one user action becomes twenty-seven requests to a dependency that is already failing.",
+        exercise:`<p>Find every outbound call in one service and list its timeout. Any that says none, or says sixty seconds, is the finding. Then add up the timeouts along one request path and compare with what the client waits: if the inner total exceeds the outer, you are doing work for a caller who has already gone.</p>`,
+        refs:[] },
+
+      { id:"circuit-breakers", name:"Circuit breakers, bulkheads and degraded modes",
+        depth:"build", core:false,
+        line:"Stop calling what is already broken, and decide what a half-working service should still do.",
+        what:`<p>Timeouts bound the damage of one slow call. They do not stop you making a thousand more to a dependency that is clearly down, each one costing a connection and a timeout's worth of waiting. A circuit breaker notices the pattern and fails immediately instead.</p>
+              <p>Alongside it sits the question nobody asks until the incident: what should the service still do when a dependency is unavailable?</p>`,
+        use:`<p>A recommendation service is down. With a breaker, after twenty consecutive failures the calls stop being attempted, product pages render instantly without recommendations, and a probe every thirty seconds checks whether it has returned. Without one, every page pays the timeout, and the recovering service is hit by full traffic the instant it comes back.</p>`,
+        concepts:[
+          ["Closed, open, half-open","Closed means calls go through. Open means fail immediately without calling. Half-open lets a trickle through to test recovery."],
+          ["It protects both sides","You stop wasting capacity on calls that will fail, and the struggling dependency gets a chance to recover instead of being held under."],
+          ["Bulkhead","A separate connection or concurrency pool per dependency, so one slow upstream cannot consume the capacity needed for the others."],
+          ["Degraded mode","A deliberate reduced behaviour: stale data, a default, a hidden feature. Decided in advance, not improvised during the incident."],
+          ["Essential versus optional","Classify every dependency. Optional ones must have a fallback; essential ones should fail the request clearly rather than hang."]
+        ],
+        how:`<p>Classify each dependency as essential or optional first, because that decides everything else. An optional dependency gets a short timeout, a breaker, and a fallback value. An essential one gets a longer budget and a clear error, since pretending to succeed without it is worse than failing.</p>
+              <p>Give each dependency its own pool, so a slow one exhausts only its own budget. That is the bulkhead, and in practice it is a concurrency limit per client rather than anything elaborate.</p>`,
+        code:[ {label:"The breaker, and what to do when it is open", code:`class Breaker:
+    # closed -> open after N consecutive failures
+    # open   -> half-open after the cooldown elapses
+    # half-open: one trial call decides. Success closes it, failure
+    #            opens it again for another cooldown.
+    def call(self, fn, fallback):
+        if self.state == "open":
+            if now() < self.opens_until:  return fallback()   # no call at all
+            self.state = "half-open"
+
+        try:
+            result = fn()
+            self.record_success()                 # closes from half-open
+            return result
+        except Exception:
+            self.record_failure()
+            if self.failures >= self.threshold:
+                self.state, self.opens_until = "open", now() + self.cooldown
+            return fallback()
+
+# Classify first, because it decides the fallback:
+#   recommendations  optional   -> [] , hide the section
+#   pricing          essential  -> fail the request, 503
+#   search           optional   -> fall back to a database LIKE query
+#   audit log        optional   -> queue it locally, send later`} ],
+        tradeoff:`<p>A sensitive breaker protects you quickly and trips on a brief blip, turning a two-second wobble into thirty seconds of degraded service for everyone. A tolerant one rides out blips and leaves you hammering a genuinely dead dependency for longer. Tune the threshold against how long your cooldown is: a long cooldown demands a high threshold, because the cost of a false trip is larger. And measure trips, because a breaker that opens regularly is telling you about a dependency problem that predates it.</p>`,
+        pitfall:"Adding a breaker without deciding the fallback. The breaker opens, the fallback throws, and you have replaced a slow failure with a fast one while believing the service is now resilient.",
+        exercise:`<p>List your dependencies and mark each essential or optional. For every optional one, write the fallback value and then force the failure in a test and confirm the page still renders. For every essential one, confirm the failure is a clean error with a useful code, not a timeout thirty seconds later.</p>`,
+        refs:[] },
+
+      { id:"lifecycle-probes", name:"Readiness, liveness and graceful shutdown",
+        depth:"build", core:true,
+        line:"Liveness asks whether to restart you; readiness asks whether to send you traffic. Conflating them causes restart loops.",
+        what:`<p>An orchestrator needs two different answers. Should this instance be restarted, and should it receive requests right now? They are not the same question, and answering them with the same endpoint produces one of two bad outcomes: instances killed for being briefly busy, or dead instances left in rotation.</p>
+              <p>The same distinction drives shutdown. An instance being stopped should stop receiving traffic before it stops serving it.</p>`,
+        use:`<p>A health endpoint checks the database and is used for both probes. The database has a thirty-second blip. Readiness correctly removes every instance from the load balancer, and liveness simultaneously decides every instance is dead and restarts them all. The database recovers into a cold, empty cluster with no warm caches and no connections.</p>`,
+        concepts:[
+          ["Liveness","Is this process broken beyond recovery? Should check almost nothing: that the event loop turns and the process is not deadlocked. A dependency must never fail it."],
+          ["Readiness","Can this instance serve a request right now? Checks the dependencies it genuinely needs, and may legitimately fail and recover repeatedly."],
+          ["Startup","A separate, more patient probe for slow boots, so a service that takes ninety seconds to warm up is not killed for failing liveness at thirty."],
+          ["SIGTERM then SIGKILL","The orchestrator asks, waits for a grace period, then forces. Your drain must fit inside that period or it is pointless."],
+          ["Drain order","Fail readiness first, so traffic stops arriving. Then stop accepting, finish in-flight work, close pools, exit."]
+        ],
+        how:`<p>Make liveness trivial and readiness meaningful. Then implement shutdown in that order, with a deadline so a stuck request cannot prevent the process exiting. There is one subtlety: after failing readiness, wait a couple of seconds before closing the listener, because load balancers take time to notice and will otherwise send requests to a socket you have already closed.</p>`,
+        code:[ {label:"Node: draining, with an in-flight request", lang:"js", code:`process.on('SIGTERM', async () => {
+  ready = false;                   // 1. fail readiness: no new traffic
+  await sleep(2000);               //    give the load balancer time to notice
+  server.close(() => {             // 2. stop accepting, finish in-flight
+    closePools();                  // 3. release resources
+    process.exit(0);
+  });
+  setTimeout(() => {               // 4. a deadline, inside the grace period
+    console.error('drain deadline exceeded, forcing exit');
+    process.exit(1);
+  }, 10_000).unref();
+});
+
+// Run with a 400ms request in flight when SIGTERM arrives:
+//   SIGTERM received
+//     readiness now failing, in-flight: 1
+//   client got: 200 done              <- the in-flight request completed
+//     in-flight finished, closing resources
+
+// Without this, that client gets a connection reset on every deploy.`},
+               {label:"The two probes, and what each may check", lang:"yaml", code:`livenessProbe:            # "restart me" - almost nothing
+  httpGet: { path: /livez, port: 8080 }
+  periodSeconds: 10
+  failureThreshold: 3
+  # returns 200 unless the process is genuinely wedged.
+  # NEVER checks the database: a database blip must not restart the fleet.
+
+readinessProbe:           # "send me traffic" - real dependencies
+  httpGet: { path: /readyz, port: 8080 }
+  periodSeconds: 5
+  failureThreshold: 2
+  # checks the database pool and anything essential, and may flap.
+
+startupProbe:             # patience for a slow boot
+  httpGet: { path: /livez, port: 8080 }
+  failureThreshold: 30
+  periodSeconds: 5        # up to 150s to start before liveness applies
+
+terminationGracePeriodSeconds: 30   # must exceed your drain deadline`} ],
+        tradeoff:`<p>A readiness check that verifies every dependency is honest and couples your availability to theirs: an optional dependency failing takes the instance out of rotation when it could have served degraded responses perfectly well. A readiness check that verifies nothing never removes a broken instance. The rule that works: readiness checks only what the instance needs to serve <em>any</em> request, usually the database, and optional dependencies are handled by the breakers and fallbacks in the previous topic rather than by withdrawing the instance.</p>`,
+        pitfall:"Pointing the liveness probe at a dependency. A shared database having a bad minute then restarts every instance of every service that checks it, converting a brief degradation into a cold-start outage across the fleet.",
+        exercise:`<p>Send SIGTERM to your service while a slow request is in flight and watch what the client receives. A connection reset means you have no drain, and that is happening on every deploy today. Add the sequence above, then check that your grace period is longer than your drain deadline.</p>`,
+        refs:[ ["Kubernetes: liveness, readiness and startup probes","https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/"] ] },
+
+      { id:"error-handling", name:"Error handling that aids diagnosis",
+        depth:"build", core:true,
+        line:"An empty catch block is the most expensive line in a codebase.",
+        what:`<p>Error handling has two audiences: the caller, who needs a stable code and no internal detail, and you at three in the morning, who needs to know exactly what happened and where. Most codebases serve neither, because errors are caught too early, logged without context, or swallowed entirely.</p>`,
+        use:`<p>An order silently fails to send its confirmation. The handler wraps the call in a try/catch that logs "failed to send email" with no error, no order id and no stack. The log line appears four thousand times across the week. Nobody can tell which orders, which failure, or whether it is one cause or five.</p>`,
+        concepts:[
+          ["Expected versus unexpected","An expected error is part of the domain: card declined, out of stock. An unexpected one is a bug or an outage. They deserve different handling and different log levels."],
+          ["Catch at a boundary","Handle errors where you can actually do something: a request handler, a job runner, a consumer. Catching in the middle usually means swallowing."],
+          ["Add context, re-raise","Each layer should attach what it knows — the order id, the operation — and let the error continue. Wrapping that preserves the cause is what makes a stack useful."],
+          ["Never swallow","An empty catch destroys the evidence. If an error is genuinely ignorable, log it at debug level with the reason it is ignorable, so the decision is visible."],
+          ["Separate what you return from what you log","The caller gets a stable code and a correlation id. The log gets the type, the message, the stack and the context."]
+        ],
+        how:`<p>Define a small error taxonomy for the domain and map it to status codes in one place, so a new error type gets the right code automatically. Let unexpected errors reach the boundary handler, which logs the full detail and returns a 500 with a correlation id. Then the response is safe and the log is complete.</p>`,
+        code:[ {label:"Context added at each layer, nothing swallowed", code:`# Domain errors: expected, mapped centrally.
+class DomainError(Exception):       code = "DOMAIN_ERROR";    status = 400
+class NotFound(DomainError):        code = "NOT_FOUND";       status = 404
+class NotOwned(DomainError):        code = "NOT_OWNED";       status = 404
+class CardDeclined(DomainError):    code = "CARD_DECLINED";   status = 402
+class AlreadyShipped(DomainError):  code = "ALREADY_SHIPPED"; status = 409
+
+# Middle layers add context and re-raise; they do not decide.
+def charge_order(order):
+    try:
+        return gateway.charge(order.total, key = order.id)
+    except GatewayTimeout as e:
+        raise PaymentUnavailable(f"charging order {order.id}") from e
+                                              # ^ the cause is preserved
+
+# One boundary handler decides what the caller sees.
+def boundary(request, handler):
+    try:
+        return handler(request)
+    except DomainError as e:
+        log.info("domain error", code=e.code, request_id=request.id)
+        return e.status, problem(code=e.code, requestId=request.id)
+    except Exception as e:
+        log.error("unhandled", exc_info=e,    # type, message, FULL stack
+                  request_id=request.id, path=request.path,
+                  user_id=request.user_id)
+        return 500, problem(code="INTERNAL", requestId=request.id)
+                           # no stack, no message, just the id to quote`} ],
+        tradeoff:`<p>Returning detailed errors helps legitimate callers debug and helps attackers map your system. The split that works is by audience rather than by detail level: domain errors are the caller's business and should be specific, while anything unexpected gets a generic code and a correlation id, with the detail in the log. That way a support engineer with the id gets everything and an anonymous caller gets nothing, which is the distinction that matters rather than how verbose the message is.</p>`,
+        pitfall:"Logging an error and then re-raising it. The same failure is logged at every layer it passes through, so one incident produces five entries that look like five problems, and the real count of distinct failures becomes unknowable.",
+        exercise:`<p>Search your codebase for catch blocks that are empty or that log without including the error object. Fix the three worst. Then trigger an unhandled exception and check two things: that the response contains a correlation id and no stack, and that searching your logs for that id returns the full stack and the context.</p>`,
+        refs:[] },
+
+      { id:"backups-rollback", name:"Backups, restore drills and rollback",
+        depth:"build", core:false,
+        line:"A backup you have never restored is a hypothesis, not a backup.",
+        what:`<p>Everyone has backups. Far fewer have ever restored one, and the restore is the only part that matters. The common discoveries, made during an incident, are that the backup excluded a table, that it is encrypted with a key nobody has, or that restoring takes eleven hours and the business expected one.</p>
+              <p>Rollback is the same problem on a shorter timescale: getting back to the previous version after a bad deploy, when the database has already moved on.</p>`,
+        use:`<p>A migration drops a column that turns out to be in use. The code deploy is reverted in two minutes, and the column is gone, so the old code fails on every request. The rollback worked perfectly and the system is still down, because the schema change was not reversible and nobody checked that it needed to be.</p>`,
+        concepts:[
+          ["RPO","Recovery point objective: how much data you can afford to lose, which is set by backup frequency. Nightly backups mean up to a day."],
+          ["RTO","Recovery time objective: how long you can afford to be down, which is set by how long a restore takes. These are different numbers and both need stating."],
+          ["Point-in-time recovery","Continuous archiving lets you restore to any moment, which is what you want after a bad migration or an accidental delete at a known time."],
+          ["The drill","Restoring to a scratch environment, on a schedule, timed, with the result written down. The only thing that converts a backup into a capability."],
+          ["Forward fix versus rollback","Rolling back code is fast; rolling back a schema often is not. Expand and contract exists so that the code can always go back."]
+        ],
+        how:`<p>Write down your RPO and RTO as numbers and check that your current setup meets them, which usually means timing a real restore. Automate the drill: restore the latest backup into a scratch environment weekly, run a query that checks row counts and a few invariants, and alert if it fails or takes longer than the RTO.</p>
+              <p>For rollback, make every schema change backwards compatible with the previous release, which is exactly the expand-and-contract sequence from the database stage. Then a revert is always safe and never needs a decision under pressure.</p>`,
+        code:[ {label:"What the drill actually checks", lang:"bash", code:`# Weekly, automated, into a scratch instance.
+restore_latest_backup --target scratch --timeout 2h
+
+# 1. Did it finish inside the RTO?
+#    Record the duration. A restore that is creeping up month by month
+#    is the warning you get before it exceeds the objective.
+
+# 2. Is the data all there?
+psql scratch -c "
+  select 'orders'    as t, count(*) from orders
+  union all select 'customers', count(*) from customers
+  union all select 'payments',  count(*) from payments;"
+#    Compare against production. A table missing from the backup
+#    configuration shows up here and nowhere else.
+
+# 3. How far behind is it? That number is your real RPO.
+psql scratch -c "select max(created_at) from orders;"
+
+# 4. Does the application actually start against it?
+#    Point a test instance at the restored database and run the
+#    smoke tests. A restore that produces an unusable database has
+#    told you nothing.`} ],
+        tradeoff:`<p>More frequent backups and continuous archiving shrink the RPO and cost storage and some write overhead; a shorter RTO usually means a warm standby, which is close to doubling the database bill. Both are bought, not configured, so the sizing has to come from the business: what is an hour of lost orders worth, and what is an hour of downtime worth. Teams that skip that conversation end up with whatever the default was, discovered during the incident.</p>`,
+        pitfall:"Keeping backups in the same account, region or storage as the thing they back up. A compromise or a misconfigured lifecycle rule that destroys the primary very often destroys the backups too, since they were only ever one permission away.",
+        exercise:`<p>Restore your most recent backup into a scratch environment and time it. Compare the row counts with production and note the newest record's timestamp. Those two numbers are your real RTO and RPO; compare them with what people assume. Then check whether your last migration could have been reverted with the previous code still running.</p>`,
+        refs:[ ["PostgreSQL: continuous archiving and PITR","https://www.postgresql.org/docs/current/continuous-archiving.html"] ] }
+
+    ],
+    after:[
+      ["Bound every wait","A deadline on every call, composed downwards, with jitter and a retry budget."],
+      ["Stop calling what is broken","A breaker per dependency, each classified essential or optional with a decided fallback."],
+      ["Deploy without dropping requests","Separate probes, drain in order, and a deadline inside the grace period."],
+      ["Make failures diagnosable","Context added at each layer, nothing swallowed, caller and log served separately."],
+      ["Know your real RPO and RTO","Measured by a restore you actually performed, not by the backup schedule."]
+    ],
+    sources:`<p>Verified by running, on Node 22 in this container: the jitter comparison, where ten clients at attempt three spread from 4ms to 711ms instead of all firing at 800ms, and the graceful shutdown sequence, where SIGTERM arriving during a 400ms request failed readiness immediately, let the in-flight request complete with 200, and then exited.</p>
+      <p>References, not retrieved while writing: the Kubernetes probe documentation and the PostgreSQL continuous archiving page.</p>` }
 ];
 
 const DEPTH = { understand:"Understand", build:"Build" };
