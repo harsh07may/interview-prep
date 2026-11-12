@@ -4495,7 +4495,100 @@ jwt.verify(token, key, { clockTolerance: 5 });   // seconds
       ["Stop trusting timestamps","Monotonic for durations, a single authority for ordering, tolerance for skew."]
     ],
     sources:`<p>Computed while writing: the consistent hashing comparison. Over 10,000 keys, adding a fifth node to four moves 7,963 keys under modulo placement and 1,905 under consistent hashing with 150 virtual nodes per node, against an ideal minimum of 2,000. The quorum table is arithmetic.</p>
-      <p>References, not retrieved while writing: this stage deliberately cites no implementation of consensus, because the topic's position is that you operate these mechanisms rather than build them. The planned system design track is named as the place that goes further into decomposition.</p>` }
+      <p>References, not retrieved while writing: this stage deliberately cites no implementation of consensus, because the topic's position is that you operate these mechanisms rather than build them. The planned system design track is named as the place that goes further into decomposition.</p>` },
+
+{ num:16, id:"capstone", phase:6, name:"Capstone: build the order service",
+    intro:"One service, eight milestones, each exercising the topics you have just read.",
+    custom:`<div class="cap">
+
+<h3>The brief</h3>
+<p>Build the backend for a small shop. A customer can place an order, pay for it, and read their own orders. Staff can mark an order shipped. That is the whole feature set, and it is deliberately small, because the difficulty here is not the domain.</p>
+<p>You get one relational database, one cache, one queue and one object store. Everything else is code you write.</p>
+<p>Three constraints make it the real exercise, and they are the whole point:</p>
+<ul>
+  <li>A client that retries a request must not create a second order or take a second payment.</li>
+  <li>Killing the process at any moment must lose no accepted work and leave nothing half-done.</li>
+  <li>When the payment provider is down, the service must still do everything that does not need it, and say clearly what it cannot do.</li>
+</ul>
+
+<h3>What to leave out</h3>
+<p>Each of these would make the project bigger and teach you less. They are excluded on purpose, and resisting them is part of the exercise.</p>
+<ul>
+  <li><strong>Microservices.</strong> One deployable. You cannot practise service boundaries usefully on a domain this small, and the distributed-monolith topic explains what you would actually be building.</li>
+  <li><strong>Kubernetes, until milestone 8.</strong> Run it with a process manager or Compose until the deployment milestone. Orchestration before the service works is displacement activity.</li>
+  <li><strong>Event sourcing and CQRS.</strong> The write model here is perfectly good for reading. Adding a projection before you have a slow query is the mistake the read models topic warns about.</li>
+  <li><strong>Multi-region, sharding, a service mesh.</strong> None of them have a problem to solve in this project, and a solution without a problem teaches the wrong instinct.</li>
+  <li><strong>A frontend.</strong> curl and your test suite are the clients. Every requirement here is observable from the API.</li>
+</ul>
+
+<h3>The milestones</h3>
+<p>In order. Each one is a few evenings, and each ends with a check you can actually run rather than a feeling that it works.</p>
+
+<div class="ms">
+  <h4>1. Schema, constraints and the first endpoints</h4>
+  <p>Design the tables for customers, orders and order items. Put the rules in the database: not-null on everything that is never meaningfully empty, a check constraint on status, a foreign key on every reference, and a non-negative check on money. Store money as integer minor units with a currency. Then build <code>POST /orders</code> and <code>GET /orders/{id}</code> with nothing clever in them.</p>
+  <p class="uses">Exercises: layering and dependency boundaries, serialization and data contracts, relational modelling, keys and constraints, resource modelling.</p>
+  <div class="check"><p><strong>Check:</strong> write a test that bypasses your application code entirely and inserts a row violating each rule directly through SQL. Every one must be rejected by the database. If any succeeds, that rule lives only in your application and a migration will break it one day.</p></div>
+</div>
+
+<div class="ms">
+  <h4>2. Validation, the error model and the orders list</h4>
+  <p>Add a schema that validates the whole request body, rejects unknown fields, bounds every string and array, and returns every error at once. Adopt one error envelope with a stable code and a correlation id, including for unhandled exceptions. Then add <code>GET /orders</code> with keyset pagination, filtering by status and a bounded page size.</p>
+  <p class="uses">Exercises: validation at the boundary, error model design, collection endpoints, SQL fluency, indexes.</p>
+  <div class="check"><p><strong>Check:</strong> seed ten thousand orders. Page through the entire list in a loop while a second process inserts new orders at the top. Collect every id you receive and assert there are no duplicates and nothing was skipped. Then do the same with <code>OFFSET</code> and record how many duplicates you get.</p></div>
+</div>
+
+<div class="ms">
+  <h4>3. Idempotent order creation</h4>
+  <p>Require an <code>Idempotency-Key</code> header on <code>POST /orders</code>. Claim the key with a unique constraint in the same transaction as the order, store the response you returned, and replay it on a repeat. Handle all three cases: the duplicate after completion, the duplicate while the first is still running, and the same key with a different body.</p>
+  <p class="uses">Exercises: idempotency and safe retries, transactions, locking and lost updates, HTTP semantics.</p>
+  <div class="check"><p><strong>Check:</strong> fire the same key twice <em>concurrently</em>, not sequentially. Exactly one order must exist and both responses must be byte-identical. This is the test that fails if you used check-then-insert, and the sequential version will not catch it.</p></div>
+</div>
+
+<div class="ms">
+  <h4>4. Authentication and tenant-scoped authorization</h4>
+  <p>Add sign-up and sign-in with Argon2id, identical responses whether or not an account exists, and a session cookie with all four flags. Then make authorization structural: a repository constructed with the caller's identity, so a query that forgets the scope cannot be written. Add the staff role for marking an order shipped.</p>
+  <p class="uses">Exercises: sessions versus tokens, passwords, authorization models, untrusted input, data protection.</p>
+  <div class="check"><p><strong>Check:</strong> as customer A, request every endpoint that takes an id, using ids belonging to customer B. Every one must return 404, not 403 and certainly not 200. Then assert that posting a password to the sign-in endpoint produces no log line anywhere containing that password.</p></div>
+</div>
+
+<div class="ms">
+  <h4>5. Caching the read path</h4>
+  <p>Cache the order detail read with cache-aside, a versioned key and a TTL, invalidating on write. Wrap every cache call so a cache failure degrades to a database read rather than an error. Add an <code>ETag</code> to the read endpoint and answer 304 on revalidation. Then add single-flight so concurrent misses on one key produce one query.</p>
+  <p class="uses">Exercises: cache strategies, keys and TTLs, stampedes, HTTP caching, finding the bottleneck.</p>
+  <div class="check"><p><strong>Check:</strong> three things. Kill the cache and confirm the endpoint still returns correct results. Delete a hot key and fire two hundred concurrent requests, asserting the database saw one query. Update an order and confirm the next read reflects it, and that a conditional request returns 304 when it has not changed.</p></div>
+</div>
+
+<div class="ms">
+  <h4>6. Payment as a background job, with an outbox</h4>
+  <p>Move payment out of the request. Write the order and an outbox row in one transaction, and have a relay publish it. A worker consumes the event, calls a payment provider stub using the order id as the provider's idempotency key, and records the result. Make the consumer idempotent with a processed-message table in the same transaction as its effect. Add bounded retries with jittered backoff and a dead-letter queue.</p>
+  <p class="uses">Exercises: background jobs, the outbox pattern, consumer idempotency, retries and dead-letter queues, delivery semantics, timeouts and retries.</p>
+  <div class="check"><p><strong>Check:</strong> kill the worker mid-job, repeatedly, under load. No job may be lost and nothing may be charged twice. Then stop the broker entirely, place an order, and confirm the order and its outbox row both committed and the event is delivered when the broker returns.</p></div>
+</div>
+
+<div class="ms">
+  <h4>7. Operating it: timeouts, degradation, logs, metrics and probes</h4>
+  <p>Put a deadline on every outbound call, composed from the request's own. Add a circuit breaker around the payment provider with a decided fallback. Add structured logs with a correlation id threaded through the request, the outbox and the worker. Export the four golden signals with latency as a histogram. Add separate liveness and readiness endpoints and a graceful shutdown that drains.</p>
+  <p class="uses">Exercises: timeouts and retries, circuit breakers and degraded modes, structured logs, metrics, lifecycle probes, error handling.</p>
+  <div class="check"><p><strong>Check:</strong> stub the payment provider to hang forever. The endpoint must return a degraded response within its own timeout, the breaker must open, and the correlation id in the response must find the whole story in your logs, including the worker. Then send SIGTERM during a slow request and confirm the client gets its response rather than a connection reset.</p></div>
+</div>
+
+<div class="ms">
+  <h4>8. Container, pipeline and a zero-downtime deploy</h4>
+  <p>Containerise it: pinned base, dependency layer before source, non-root, exec-form entrypoint. Build one artifact and promote it by digest through a pipeline that runs your tests against that artifact. Then do the deploy that matters: add a column using expand and contract while the old version is still serving traffic.</p>
+  <p class="uses">Exercises: containerising, build-once pipelines, release strategies, zero-downtime migrations, statelessness, resource limits.</p>
+  <div class="check"><p><strong>Check:</strong> run a load generator at a steady rate. Perform a rolling deploy and assert zero failed requests. Then run the migration with the previous version still live and confirm it keeps working throughout. If either drops a request, you have found the thing this milestone exists to teach.</p></div>
+</div>
+
+<div class="closing">
+  <h3>When you are done</h3>
+  <p>Come back to the route and use the filters. Set it to <em>Core only</em> and tick what you can now both explain and build. The topics you had to reread while building are the ones worth revisiting, and they will not be the ones you expected at the start.</p>
+  <p>Then take one thing the capstone deliberately excluded, decide whether this service would actually benefit from it, and write down why. That judgement, rather than any single technique, is what the route was for.</p>
+</div>
+
+</div>`,
+    sources:`<p>The milestones compose the per-topic exercises from stages 1 to 14 into one service, and each acceptance check is phrased so it either passes or fails rather than being judged by eye. Several checks are deliberately the concurrent or failure version of a test that is easy to pass sequentially: the idempotency check in milestone 3 and the worker-kill check in milestone 6 both exist because the straightforward version of each passes against code that is wrong.</p>
+      <p>No external sources. Everything here refers back to topics earlier in this route.</p>` }
 ];
 
 const DEPTH = { understand:"Understand", build:"Build" };
