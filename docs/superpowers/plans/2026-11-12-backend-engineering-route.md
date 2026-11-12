@@ -1,5 +1,9 @@
 # Backend Engineering Route Implementation Plan
 
+> **Status: complete.** All 20 tasks executed, 101 topics across 15 stages plus
+> the capstone, integrated into the landing page and documented. What differed
+> from the plan is recorded in section 10 of the design spec.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a fourth PrepOps track at `backend/index.html` — a 15-stage, 101-topic practical learning route for backend engineering, plus a capstone project spec — integrated into the landing page, README and CLAUDE.md.
@@ -103,7 +107,7 @@ The critical task. It establishes every interface the fifteen content tasks cons
 
   `lang` accepts `js`, `cs`, `sql`, `yaml`, `bash`, `json`, `dockerfile`, `nginx`, `text`. `dockerfile`, `nginx` and `text` render unhighlighted on purpose — highlight.js 11.9.0's common bundle does not carry the first two, and mis-highlighted pseudocode is worse than plain.
 
-- [ ] **Step 1: Copy the shell from the React track**
+- [x] **Step 1: Copy the shell from the React track**
 
 The React track is the newest and cleanest of the two data-driven pages.
 
@@ -111,7 +115,7 @@ The React track is the newest and cleanest of the two data-driven pages.
 cd /home/user/interview-prep && mkdir -p backend && cp react-typescript/index.html backend/index.html
 ```
 
-- [ ] **Step 2: Replace the head**
+- [x] **Step 2: Replace the head**
 
 In `backend/index.html`, replace `<title>`, both meta descriptions, the og tags and the favicon emoji:
 
@@ -126,7 +130,7 @@ In `backend/index.html`, replace `<title>`, both meta descriptions, the og tags 
 
 Keep the existing `<link>` font tags unchanged — the same three families are used.
 
-- [ ] **Step 3: Recolour all three colour blocks**
+- [x] **Step 3: Recolour all three colour blocks**
 
 Replace the accent tokens in the light `:root`, the `@media (prefers-color-scheme: dark)` block and `:root[data-theme="dark"]`. Light:
 
@@ -142,7 +146,7 @@ Dark (both dark blocks):
 
 Leave `--fresher`, `--mid`, `--senior`, `--trap-bg`, `--trap-line`, `--code-bg` and the hljs token colours alone; the level pills are repurposed as depth pills and the trap box as the pitfall box.
 
-- [ ] **Step 4: Add the new CSS**
+- [x] **Step 4: Add the new CSS**
 
 Append to the `<style>` block, after the existing `.lvl` rules. These are the only new classes; everything else reuses the copied shell.
 
@@ -192,7 +196,7 @@ figure.snip pre{margin:0}
 @media (max-width:560px){.t-meta{flex-wrap:wrap;justify-content:flex-end}}
 ```
 
-- [ ] **Step 5: Replace the hero**
+- [x] **Step 5: Replace the hero**
 
 Six phase dots, not fifteen stages — fifteen would be illegible. Replace the whole `<header class="wrap hero">` block:
 
@@ -216,7 +220,7 @@ Six phase dots, not fifteen stages — fifteen would be illegible. Replace the w
 </header>
 ```
 
-- [ ] **Step 6: Replace the toolbar**
+- [x] **Step 6: Replace the toolbar**
 
 Four filters instead of three levels, and an overall progress readout:
 
@@ -238,7 +242,7 @@ Four filters instead of three levels, and an overall progress readout:
 
 Add to the `<style>` block: `.overall-progress{font-size:.9rem;color:var(--muted)}`
 
-- [ ] **Step 7: Replace the "How to use this page" section**
+- [x] **Step 7: Replace the "How to use this page" section**
 
 ```html
 <section class="howto">
@@ -254,13 +258,13 @@ Add to the `<style>` block: `.overall-progress{font-size:.9rem;color:var(--muted
 </section>
 ```
 
-- [ ] **Step 8: Replace the footer**
+- [x] **Step 8: Replace the footer**
 
 ```html
 <footer><p>That's the route. The capstone is the real test: build the order service end to end, then come back and tick the topics you had to reread.</p><p class="foot-links"><a href="../">All tracks</a><a href="../dsa/">DSA patterns</a><a href="https://github.com/harsh07may/interview-prep">Source on GitHub</a></p></footer>
 ```
 
-- [ ] **Step 9: Replace the main script with the renderer**
+- [x] **Step 9: Replace the main script with the renderer**
 
 Delete the entire first inline `<script>` (the React `topics` data and renderer) and write this in its place. This is the whole engine; Tasks 2-16 only add stage objects to `stages`.
 
@@ -468,7 +472,7 @@ toTop.addEventListener('click', () => {
 })();
 ```
 
-- [ ] **Step 10: Replace the highlight.js language map**
+- [x] **Step 10: Replace the highlight.js language map**
 
 Replace the second inline script's `map` and `langFor` with this. There is no default language: an unlabelled snippet is pseudocode and must stay unhighlighted.
 
@@ -485,11 +489,11 @@ Replace the second inline script's `map` and `langFor` with this. There is no de
 })();
 ```
 
-- [ ] **Step 11: Run the checks**
+- [x] **Step 11: Run the checks**
 
 Run all four verification commands. Expected: `html ok`, `script ok`, no duplicate ids, `topics: 1` and `fields ok`.
 
-- [ ] **Step 12: Browser check**
+- [x] **Step 12: Browser check**
 
 ```bash
 cd /home/user/interview-prep && python3 -m http.server 8000
@@ -497,7 +501,7 @@ cd /home/user/interview-prep && python3 -m http.server 8000
 
 Open `http://localhost:8000/backend/`. Confirm: the hero renders six phase dots; stage 1 renders one card; the card opens; the pitfall box, exercise disclosure and the bash snippet all appear, the snippet highlighted; ticking the box strikes the name and the two progress readouts change; a reload keeps the tick; `Core only` keeps the card and `Understand` keeps it while `Build` hides the card and the whole stage; dark mode is legible; nothing scrolls horizontally at 390px wide.
 
-- [ ] **Step 13: Commit**
+- [x] **Step 13: Commit**
 
 ```bash
 cd /home/user/interview-prep && git add backend/index.html && git commit -F - <<'MSG'
@@ -531,14 +535,14 @@ before starting any of these tasks; it is the only place the field names and the
 **Every content task has the same five steps.** They are written out once here
 rather than repeated fifteen times, because they are identical in every task:
 
-- [ ] **Step A: Write the stage object**
+- [x] **Step A: Write the stage object**
 
 Append one stage object to `stages`, using the `id`, `name`, `depth` and `core`
 values from that task's table verbatim. Write every required field for every
 topic: `line`, `what`, `use`, `concepts`, `how`. Add `code`, `tradeoff`,
 `pitfall`, `exercise` and `refs` where the task's requirements call for them.
 
-- [ ] **Step B: Run every runnable snippet**
+- [x] **Step B: Run every runnable snippet**
 
 Any snippet with `lang:"js"` is run under Node before it goes in the file, from
 the scratchpad directory, and its real output is what the prose claims. Any
@@ -547,13 +551,13 @@ container (`psql`, `sqlite3`); if not, it is marked illustrative in the prose.
 A snippet that is pseudocode carries no `lang` at all, and the prose says it is
 pseudocode.
 
-- [ ] **Step C: Run the checks**
+- [x] **Step C: Run the checks**
 
 Run all four commands from the **Verification cycle** section above.
 Expected: `html ok`, `script ok`, no duplicate ids, `fields ok`, and a `topics:`
 count equal to the running total in that task's heading.
 
-- [ ] **Step D: Browser check**
+- [x] **Step D: Browser check**
 
 Serve the page and open the new stage. Confirm every topic card renders and
 opens, every snippet is present and highlighted as its language (or deliberately
@@ -562,7 +566,7 @@ phone width, the "After this stage you can" block renders, and all four filters
 behave. A stage that renders nothing below the toolbar means a JavaScript error:
 open the console and fix it before committing.
 
-- [ ] **Step E: Commit and push**
+- [x] **Step E: Commit and push**
 
 ```bash
 cd /home/user/interview-prep && git add backend/index.html && git commit -F - <<'MSG'
@@ -1234,7 +1238,7 @@ Produces the stage object with id `capstone` and a `custom` HTML block.
 The capstone is a stage with `custom` HTML instead of `topics`, so it renders as
 prose. It has no progress ticks and no `after` block.
 
-- [ ] **Step 1: Add the capstone CSS**
+- [x] **Step 1: Add the capstone CSS**
 
 ```css
 .cap{margin:14px 0 0}
@@ -1250,7 +1254,7 @@ prose. It has no progress ticks and no `after` block.
 .cap .ms .check p{margin:0}
 ```
 
-- [ ] **Step 2: Write the capstone stage object**
+- [x] **Step 2: Write the capstone stage object**
 
 ```js
 { num:16, id:"capstone", phase:6, name:"Capstone: build the order service",
@@ -1287,22 +1291,22 @@ The `custom` HTML must contain, in this order:
    route's filters and tick what you can now defend, and reread the stages whose
    exercises you had to look things up for.
 
-- [ ] **Step 3: Update the hero and the capstone's phase**
+- [x] **Step 3: Update the hero and the capstone's phase**
 
 The capstone is phase 6 alongside `distributed`. No hero change is needed; confirm
 the sixth dot still links to `#distributed`.
 
-- [ ] **Step 4: Run the checks**
+- [x] **Step 4: Run the checks**
 
 All four verification commands. The field check skips the capstone because it has
 no `topics`; expected total is still `topics: 101`.
 
-- [ ] **Step 5: Browser check**
+- [x] **Step 5: Browser check**
 
 Confirm the capstone renders as prose with eight milestone cards, no tick boxes
 appear in it, and the overall progress still reads `n of 101 done`.
 
-- [ ] **Step 6: Commit and push**
+- [x] **Step 6: Commit and push**
 
 Commit message subject: `Add the backend route capstone: the order service`.
 
@@ -1316,7 +1320,7 @@ Commit message subject: `Add the backend route capstone: the order service`.
 **Interfaces:** Consumes `backend/index.html`'s `depth:"build"` / `depth:"understand"`
 literals, which the count script matches as text.
 
-- [ ] **Step 1: Add the colour tokens to all three colour blocks**
+- [x] **Step 1: Add the colour tokens to all three colour blocks**
 
 Light `:root`:
 
@@ -1330,7 +1334,7 @@ Both dark blocks:
 --t-backend:#5ED3C4; --t-backend-soft:#10332F;
 ```
 
-- [ ] **Step 2: Add the tile class and rebalance the spans**
+- [x] **Step 2: Add the tile class and rebalance the spans**
 
 ```css
 .track.backend{--acc:var(--t-backend);--soft:var(--t-backend-soft)}
@@ -1340,7 +1344,7 @@ Change `.note{grid-column:span 2}` to `.note{grid-column:span 3}` so that four
 track tiles, the planned tile and three notes all tile cleanly two-per-row on a
 six-column grid.
 
-- [ ] **Step 3: Generalise the count script**
+- [x] **Step 3: Generalise the count script**
 
 Replace the keyset branch in the script at the bottom of `index.html` with a
 table, so a third track kind does not need another conditional. Existing tiles
@@ -1380,7 +1384,7 @@ document.querySelectorAll(".track[data-src]").forEach(async (tile) => {
 });
 ```
 
-- [ ] **Step 4: Add the tile**
+- [x] **Step 4: Add the tile**
 
 Insert after the React tile and before the planned `sys` tile. The static counts
 are the fallback when the page is opened from disk; replace `NN`/`MM` with the
@@ -1422,7 +1426,7 @@ real counts from the field check in Task 16.
 </section>
 ```
 
-- [ ] **Step 5: Update the head and footer**
+- [x] **Step 5: Update the head and footer**
 
 ```html
 <title>PrepOps: ASP.NET Core, DSA, React and backend engineering</title>
@@ -1431,7 +1435,7 @@ real counts from the field check in Task 16.
 Update both meta descriptions to mention the backend route, and change the footer
 version line to: `Framework details target .NET 8 and .NET 10. Python examples were tested on Python 3.12, Node examples on Node 22. Checked in November 2026.`
 
-- [ ] **Step 6: Verify the counts are live**
+- [x] **Step 6: Verify the counts are live**
 
 ```bash
 cd /home/user/interview-prep && python3 -m http.server 8000
@@ -1442,7 +1446,7 @@ check's total, the mix bar has two segments, the other three tiles' counts are
 unchanged from before this task, and the grid has no orphaned tile at desktop,
 tablet and phone widths.
 
-- [ ] **Step 7: Commit and push**
+- [x] **Step 7: Commit and push**
 
 Commit message subject: `Add the backend engineering tile to the landing page`.
 
@@ -1454,7 +1458,7 @@ Commit message subject: `Add the backend engineering tile to the landing page`.
 - Modify: `README.md`
 - Modify: `CLAUDE.md`
 
-- [ ] **Step 1: README table row**
+- [x] **Step 1: README table row**
 
 Insert after the React row:
 
@@ -1462,7 +1466,7 @@ Insert after the React row:
 | [Backend engineering](backend/) | A practical route rather than a question bank: runtime and networking foundations, API design, databases, testing, security, caching and performance, concurrency, messaging, storage and integrations, reliability, observability, deployment, distributed systems, and a capstone service | Live, 101 topics across 15 stages |
 ```
 
-- [ ] **Step 2: README usage section**
+- [x] **Step 2: README usage section**
 
 Add after the DSA section:
 
@@ -1475,20 +1479,20 @@ Add after the DSA section:
 - Code is pseudocode unless labelled; real snippets are Node, with C# where a second language helps, plus real SQL and config.
 ```
 
-- [ ] **Step 3: README structure block and accuracy note**
+- [x] **Step 3: README structure block and accuracy note**
 
 Add `backend/index.html          backend engineering route` to the structure
 block, and a sentence to the accuracy section: the backend route's Node snippets
 were run on Node 22, its SQL is Postgres dialect, and its source labels say which
 pages were opened.
 
-- [ ] **Step 4: CLAUDE.md table row**
+- [x] **Step 4: CLAUDE.md table row**
 
 ```markdown
 | `backend/index.html` | Backend engineering route: 15 stages, 101 topics, plus a capstone spec | `backend:done:v1` (ticked topic ids), `backend:filter:v1` (toolbar filter) |
 ```
 
-- [ ] **Step 5: CLAUDE.md "How the backend route works" section**
+- [x] **Step 5: CLAUDE.md "How the backend route works" section**
 
 Add after the "React and TypeScript track differences" section. It must document:
 the `stages`/topic data shape with every field and which are required; that topic
@@ -1499,13 +1503,13 @@ that `code` is inserted with `textContent` so snippets are raw while `what`/`how
 are HTML and must be escaped; the capstone being a `custom` stage with no ticks;
 and how to add a stage in four ordered steps.
 
-- [ ] **Step 6: CLAUDE.md check commands and colours**
+- [x] **Step 6: CLAUDE.md check commands and colours**
 
 Add `backend/index.html` to the HTML-parse list, add the id-duplicate and field
 checks from this plan's **Verification cycle** section, and add `--t-backend` to
 the track colours sentence.
 
-- [ ] **Step 7: Verify**
+- [x] **Step 7: Verify**
 
 ```bash
 cd /home/user/interview-prep && python3 -c "import html.parser; [html.parser.HTMLParser().feed(open(f).read()) for f in ['index.html','aspnet-core/index.html','react-typescript/index.html','dsa/index.html','backend/index.html']]; print('html ok')" && grep -rn "claude.ai/artifact" --include=*.html --include=*.md --exclude=CLAUDE.md . || echo "clean"
@@ -1514,7 +1518,7 @@ cd /home/user/interview-prep && python3 -c "import html.parser; [html.parser.HTM
 Then run every command block in CLAUDE.md's "Checks before committing" section
 verbatim and confirm each one passes as written.
 
-- [ ] **Step 8: Commit and push**
+- [x] **Step 8: Commit and push**
 
 Commit message subject: `Document the backend engineering route`.
 
@@ -1524,7 +1528,7 @@ Commit message subject: `Document the backend engineering route`.
 
 **Files:** Modify: whatever the review finds.
 
-- [ ] **Step 1: Duplication sweep**
+- [x] **Step 1: Duplication sweep**
 
 ```bash
 cd /home/user/interview-prep && grep -o 'name:"[^"]*"' backend/index.html | sed 's/name:"//;s/"//' | sort
@@ -1534,7 +1538,7 @@ Read the 117 names together (101 topics plus 16 stages). For any two that could 
 ground, open both and confirm the later one defers to the earlier by name instead
 of restating it. Fix any restatement.
 
-- [ ] **Step 2: Forward-reference check**
+- [x] **Step 2: Forward-reference check**
 
 ```bash
 cd /home/user/interview-prep && grep -o 'covered in [^.<]*' backend/index.html | sort -u
@@ -1544,7 +1548,7 @@ Every cross-reference must name a stage or topic that exists, by name, and must
 not point backwards to something the reader has not reached in a way that implies
 a prerequisite. Fix any reference to a renamed or absent topic.
 
-- [ ] **Step 3: Link check**
+- [x] **Step 3: Link check**
 
 ```bash
 cd /home/user/interview-prep && grep -o 'https\?://[^"]*' backend/index.html | sort -u | while read u; do code=$(curl -s -o /dev/null -w '%{http_code}' -L --max-time 15 "$u"); echo "$code $u"; done
@@ -1555,26 +1559,26 @@ timeout is retried once before being treated as a failure; if the host is
 unreachable from this container, the link stays but the stage's `sources` must not
 claim the page was opened.
 
-- [ ] **Step 4: Accuracy audit**
+- [x] **Step 4: Accuracy audit**
 
 List every claim labelled as cited and confirm the page was actually retrieved in
 this work. Any claim that was not gets relabelled as a reference not retrieved.
 Specifically confirm: the OAuth 2.1 PKCE requirement, Postgres' default isolation
 level, and the W3C `traceparent` header name.
 
-- [ ] **Step 5: Accessibility and responsive pass**
+- [x] **Step 5: Accessibility and responsive pass**
 
 At 390px, 768px and 1280px, in light and dark: no horizontal page scroll, the
 concepts list collapses to one column on phones, every interactive control is
 reachable by keyboard with a visible focus ring, and the tick checkbox has its
 accessible label.
 
-- [ ] **Step 6: Update the spec's status**
+- [x] **Step 6: Update the spec's status**
 
 Tick every box in the spec's section 8 build order, and change the spec's status
 line from `approved design, implementation pending` to `implemented`.
 
-- [ ] **Step 7: Commit and push**
+- [x] **Step 7: Commit and push**
 
 Commit message subject: `Review pass over the backend engineering route`.
 

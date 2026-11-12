@@ -54,7 +54,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);font
 .wrap{max-width:760px;margin:0 auto;padding:0 20px}
 a{color:var(--accent-ink)}
 a:focus-visible,button:focus-visible,summary:focus-visible{outline:3px solid var(--accent);outline-offset:3px;border-radius:6px}
-code{font-family:var(--mono);font-size:.86em;background:var(--accent-soft);color:var(--accent-ink);padding:.1em .35em;border-radius:5px}
+code{font-family:var(--mono);font-size:.86em;background:var(--accent-soft);color:var(--accent-ink);padding:.1em .35em;border-radius:5px;overflow-wrap:anywhere}
 
 /* Hero */
 .hero{padding:64px 20px 28px}
@@ -96,6 +96,9 @@ code{font-family:var(--mono);font-size:.86em;background:var(--accent-soft);color
 .lvl.build{background:var(--senior-bg);color:var(--senior)}
 .lvl.understand{background:var(--accent-soft);color:var(--accent-ink)}
 .lvl.core{background:var(--mid-bg);color:var(--mid)}
+/* The legend pills carry a sentence, unlike the short pills on a card,
+   so they must be allowed to wrap on a narrow screen. */
+.howto .levels .lvl{white-space:normal}
 
 /* Stage headings */
 .phase-title{font-family:var(--display);font-size:1rem;color:var(--accent-ink);margin:0;font-weight:500}
@@ -160,7 +163,7 @@ figure.snip pre{margin:0}
   .t-meta .chev{margin-left:auto}
 }
 pre{background:var(--code-bg);color:var(--code-ink);font-family:var(--mono);font-size:.84rem;line-height:1.55;padding:16px 18px;border-radius:12px;overflow-x:auto;margin:14px 0 0}
-pre code{background:none;color:inherit;padding:0;font-size:inherit}
+pre code{background:none;color:inherit;padding:0;font-size:inherit;overflow-wrap:normal}
 /* Syntax highlighting (highlight.js tokens; code blocks are dark in both themes) */
 .hljs-keyword,.hljs-built_in.hljs-keyword{color:#C792EA}
 .hljs-string{color:#B5E08C}
@@ -2278,7 +2281,7 @@ log.info("request", fields=scrub(request_body))
     ],
     sources:`<p>Retrieved while writing: <a href="https://datatracker.ietf.org/doc/html/draft-ietf-oauth-v2-1-13" target="_blank" rel="noopener">draft-ietf-oauth-v2-1-13</a>, the OAuth 2.1 framework. The normative wording quoted in that topic is copied from it, and it is narrower than the usual summary: PKCE is required of public clients, and of other clients unless the authorization server has reasonable assurance the client mitigates code injection another way. OAuth 2.1 is still an Internet-Draft, which the topic says.</p>
       <p>Verified by running, on Node 22 with <code>jsonwebtoken</code> 9.0.3: all four JWT cases. Two of them came out against the conventional advice and changed what this stage emphasises. <code>alg:none</code> was rejected whether or not algorithms were pinned, and an RS256-to-HS256 confusion forgery was rejected too, because the library infers acceptable algorithms from the key type. What <em>was</em> accepted is a correctly signed, unexpired token minted for a different audience, whenever <code>audience</code> was not passed. The topic leads with that rather than with <code>alg:none</code>.</p>
-      <p>References, not retrieved while writing: the OWASP cheat sheets and API Security Top 10 pages, RFC 7519, RFC 8725, RFC 9106, RFC 8705, the cookie draft, OpenID Connect Core, and the MDN pages on CORS and CSP.</p>` },
+      <p>References, not retrieved while writing: the OWASP cheat sheets and API Security Top 10 pages, RFC 7519, RFC 8725, RFC 9106, RFC 8705, the cookie draft, OpenID Connect Core, and the MDN pages on CORS and CSP, whose URLs were opened only to confirm they resolve to the right pages, not to source the content here.</p>` },
 
 { num:8, id:"caching", phase:3, name:"Caching and performance",
     intro:"Making it fast, and knowing which number to look at before you try.",
@@ -3912,7 +3915,7 @@ If any of those four is missing, the alert is not finished.`} ],
         concepts:[
           ["What changed","The overwhelming majority of incidents follow a change: a deploy, a configuration edit, a feature flag, a traffic shift, a dependency's deploy. Establish the timeline first."],
           ["Confirm the symptom","Reproduce it as a measurement, not a report. &quot;Users say it is slow&quot; and &quot;p99 on POST /orders went from 200ms to 4s at 09:14&quot; lead to different investigations."],
-          ["Bisect the path","Use the hops from the request-path topic. Edge, application, database, each dependency. Halve the search space rather than guessing a culprit."],
+          ["Bisect the path","Use the hops from the path of a request, the first topic in this route. Edge, application, database, each dependency. Halve the search space rather than guessing a culprit."],
           ["One hypothesis at a time","State it, state what would disprove it, then test it. Two simultaneous changes mean you learn nothing from the outcome."],
           ["Preserve evidence","Before restarting, capture what dies with the process: a heap snapshot, a thread dump, current connections, in-flight requests."]
         ],

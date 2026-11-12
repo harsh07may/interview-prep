@@ -1,6 +1,6 @@
 # Backend engineering route — design
 
-Status: approved design, implementation pending.
+Status: implemented. See docs/superpowers/plans/2026-11-12-backend-engineering-route.md for the build order that was followed.
 Date: 2026-11-12.
 Branch: `claude/dazzling-mccarthy-0px7mf`.
 
@@ -309,26 +309,26 @@ refactoring: the existing script cannot count a two-bucket track.
 One stage per commit, so the page is never half-rendered and a later session can
 resume from this list.
 
-- [ ] Shell: head, colour blocks, CSS, hero, toolbar, renderer, progress, `langFor()`
-- [ ] Stage 1 - Runtime foundations
-- [ ] Stage 2 - Networking and the edge
-- [ ] Stage 3 - Designing APIs
-- [ ] Stage 4 - Data modelling and the database
-- [ ] Stage 5 - The data layer in production
-- [ ] Stage 6 - Testing and quality
-- [ ] Stage 7 - Auth, authorization and security
-- [ ] Stage 8 - Caching and performance
-- [ ] Stage 9 - Concurrency and async work
-- [ ] Stage 10 - Messaging and event-driven architecture
-- [ ] Stage 11 - Storage and external integrations
-- [ ] Stage 12 - Reliability and fault tolerance
-- [ ] Stage 13 - Observability and debugging
-- [ ] Stage 14 - Deployment and production engineering
-- [ ] Stage 15 - Distributed systems you'll actually meet
-- [ ] Capstone
-- [ ] Landing page integration
-- [ ] README and CLAUDE.md
-- [ ] Final review pass: duplication, sequencing, accuracy, link check
+- [x] Shell: head, colour blocks, CSS, hero, toolbar, renderer, progress, `langFor()`
+- [x] Stage 1 - Runtime foundations
+- [x] Stage 2 - Networking and the edge
+- [x] Stage 3 - Designing APIs
+- [x] Stage 4 - Data modelling and the database
+- [x] Stage 5 - The data layer in production
+- [x] Stage 6 - Testing and quality
+- [x] Stage 7 - Auth, authorization and security
+- [x] Stage 8 - Caching and performance
+- [x] Stage 9 - Concurrency and async work
+- [x] Stage 10 - Messaging and event-driven architecture
+- [x] Stage 11 - Storage and external integrations
+- [x] Stage 12 - Reliability and fault tolerance
+- [x] Stage 13 - Observability and debugging
+- [x] Stage 14 - Deployment and production engineering
+- [x] Stage 15 - Distributed systems you'll actually meet
+- [x] Capstone
+- [x] Landing page integration
+- [x] README and CLAUDE.md
+- [x] Final review pass: duplication, sequencing, accuracy, link check
 
 ## 9. Verification
 
@@ -344,3 +344,41 @@ grep -rn "claude.ai/artifact" --include=*.html --include=*.md --exclude=CLAUDE.m
 Then by eye: every stage renders, all four filters work, ticks survive a reload,
 light and dark mode, phone width. A runtime error leaves the page empty below the
 toolbar, so the page is opened after every stage is added.
+
+## 10. What changed during implementation
+
+Recorded because the design is otherwise a record of intentions rather than of
+what was built.
+
+- **Topic count.** The design said "about 105"; the final route has exactly 101
+  topics across 15 stages plus the capstone, after a review pass that merged
+  overlapping topics and cut three that were filler.
+- **Verification went much further than planned.** The container turned out to
+  have PostgreSQL 16.15, Redis 7.0.15 and a Docker client already installed.
+  Postgres and Redis were started, so most SQL and cache claims are measured
+  rather than asserted. There is no Docker daemon and no cluster, so the
+  Dockerfile and the Kubernetes manifests are labelled in the page as
+  unvalidated.
+- **Three claims were rewritten because testing contradicted them.** A wrongly
+  ordered index does not stop Postgres using the index; it still performs an
+  index scan and the cost shows up in pages read (62 against 25). A current
+  `jsonwebtoken` rejects both `alg:none` and RS256-to-HS256 confusion, so the
+  JWT topic leads instead with the token minted for a different audience, which
+  is accepted whenever `audience` is not passed. OAuth 2.1 requires PKCE of
+  public clients and of others only where the authorization server lacks
+  assurance of another mitigation, which is narrower than the usual summary.
+- **Two demonstrations were replaced because they did not demonstrate
+  anything.** The first flaky-test example was not actually flaky, and the first
+  webhook re-serialisation example round-tripped byte-identically because the
+  payload was already canonical.
+- **Four layout bugs were found by browser testing**, not by reading: an empty
+  `refs` array printed a bare "References:" label; the card summary's pills took
+  column one and pushed the title right; at phone width the pills column
+  squeezed the one-line summary to 131px, because the stacking media query sat
+  earlier in the stylesheet than the rule it had to override; and a 44-character
+  URL in an inline `<code>` forced horizontal page scroll until inline code was
+  allowed to break.
+- **The landing page count script was generalised** rather than extended, so a
+  track kind is a table entry instead of another branch.
+- **The artifact-link check in CLAUDE.md now excludes `docs/superpowers`**,
+  because the planning notes quote the command and so matched themselves.
