@@ -1687,7 +1687,237 @@ select now() - pg_last_xact_replay_timestamp() as behind;
       ["Use replicas without lying to users","Routing per request, lag monitored as a percentile, and writes read back from the primary."]
     ],
     sources:`<p>Verified while writing, against the live PostgreSQL 16.15 in this container: the insert timings (37.917ms for 10,000 single-row inserts in a server-side loop against 8.486ms for one multi-row statement, which the topic is careful to label as an understatement because the loop pays no network cost), the soft-delete unique violation and its exact error text, the partial unique index accepting the new live row while still rejecting a second live duplicate, and the server-side cursor fetching in pieces.</p>
-      <p>References, not retrieved while writing: the PostgreSQL documentation pages linked from each topic. The replication queries are standard catalogue views and were not run here, because this container has a single instance and no replica.</p>` }
+      <p>References, not retrieved while writing: the PostgreSQL documentation pages linked from each topic. The replication queries are standard catalogue views and were not run here, because this container has a single instance and no replica.</p>` },
+
+{ num:6, id:"testing", phase:2, name:"Testing and quality",
+    intro:"Tests that catch real failures, run fast, and do not have to be re-run to believe.",
+    topics:[
+
+      { id:"test-levels", name:"What to test at which level",
+        depth:"build", core:true,
+        line:"A decision rule, not a pyramid: test logic in isolation and wiring against the real thing.",
+        what:`<p>The pyramid is a shape, not advice. The useful version is a rule: test pure decisions where they are cheapest to test, and test everything that crosses a boundary against the real thing, because boundaries are where the bugs are and where a mock will lie to you.</p>
+              <p>What gets skipped, almost universally, is the error and authorization paths. They are the paths that run when something is already wrong, which is exactly when you need them to behave.</p>`,
+        use:`<p>A service has 400 unit tests and 92% coverage, and ships a release where every endpoint returns 500 because a configuration key was renamed. No unit test touched startup. One test that boots the application and makes a real request would have caught it, and it is the test nobody wrote because it did not fit the pyramid.</p>`,
+        concepts:[
+          ["Unit","One function or class, no I/O, no framework. Milliseconds. Right for business rules, calculations and state machines, which is where the subtle bugs live."],
+          ["Integration","Your code against a real database, a real cache, a real queue. Hundreds of milliseconds. Right for queries, migrations, transactions and anything with SQL in it."],
+          ["Boundary","A real HTTP request through the real routing, middleware and serialization, into a real database. Right for status codes, validation and authorization."],
+          ["End to end","The deployed system, including other services. Slow and brittle. Right for a handful of critical journeys and nothing else."],
+          ["The paths people skip","Error responses, authorization denials, and startup. They never appear in a happy-path test and they run on your worst day."]
+        ],
+        how:`<p>Pick the level by asking what could actually break. A pricing rule breaks arithmetically, so unit test it exhaustively. A query breaks against real SQL and a real schema, so integration test it; a mocked repository returning a hand-built object proves only that you can build an object. A status code breaks in middleware, serialization or routing, so test it through the boundary.</p>
+              <p>Then write the four tests nobody writes for each endpoint: unauthenticated, authenticated but not permitted, valid request against missing data, and malformed body. They are quick, and they are the ones that fail in production.</p>`,
+        code:[ {label:"The four tests per endpoint, every time", code:`describe("GET /orders/{id}"):
+
+    # happy path, the one everybody writes
+    it("returns the order to its owner")            -> 200
+
+    # the four that get skipped
+    it("rejects an unauthenticated request")        -> 401
+    it("hides another tenant's order")              -> 404   not 403
+    it("returns 404 for an id that does not exist") -> 404
+    it("rejects a malformed id")                    -> 400
+
+Rule of thumb for which level:
+    pure decision, no I/O          -> unit, exhaustively
+    SQL, migration, transaction    -> integration, real database
+    status code, auth, validation  -> boundary, real HTTP
+    critical user journey          -> end to end, a handful only`} ],
+        tradeoff:`<p>Unit tests are fast and can test a mocked version of reality that does not exist. Integration tests are slower and test what will actually happen. The usual mistake is not the ratio but the placement: mocking the database to test a query, which tests the mock, while skipping the boundary test that would have caught the renamed config key. Spend the slow tests where a boundary is crossed, and keep the fast ones for logic that has no boundary at all.</p>`,
+        pitfall:"Treating coverage as the goal. Coverage counts lines executed, not assertions made, so a test that calls everything and asserts nothing scores perfectly, and the number goes up fastest by testing trivial code.",
+        exercise:`<p>Pick one endpoint and write the five tests above. Then delete your service's configuration validation and run the full suite. If everything still passes, you have no test that boots the application, and that is the highest-value test you are missing.</p>`,
+        refs:[] },
+
+      { id:"integration-tests", name:"Integration tests against real dependencies",
+        depth:"build", core:true,
+        line:"Run against a real database, and roll each test back so the next one starts clean.",
+        what:`<p>A test that mocks the database cannot catch a wrong column name, a constraint violation, a bad migration, a transaction that does not do what you thought, or SQL that is simply invalid. Those are most of the bugs in data access code, so data access code needs a real database.</p>
+              <p>The thing that makes this practical is isolation: each test runs in a transaction that is always rolled back, so tests cannot see each other's data and the suite can run in any order.</p>`,
+        use:`<p>A query uses <code>status = 'PAID'</code> while the database stores <code>'paid'</code>. Every unit test passes, because the mocked repository returns whatever the test told it to. The first real query returns zero rows, in production, on the orders dashboard.</p>`,
+        concepts:[
+          ["A real dependency","The same engine and major version as production. A different database is a different dialect, different constraint behaviour and different plans."],
+          ["Ephemeral instances","Testcontainers or a Compose service starts a throwaway database per run, so there is no shared state between developers or CI jobs."],
+          ["Transaction rollback","Begin before the test, roll back after. Fast, complete, and it needs no cleanup code that can itself be buggy."],
+          ["Schema from migrations","Build the test schema by running your real migrations, so the migrations are tested on every run too."],
+          ["What stays mocked","Third-party APIs you do not control. Everything you deploy yourself should be real."]
+        ],
+        how:`<p>Start one database for the suite, apply the migrations once, then wrap each test in a transaction and roll it back. The whole mechanism is about ten lines, and it removes the entire category of tests that fail because a previous test left a row behind.</p>`,
+        code:[ {label:"Node: each test undoes itself", lang:"js", code:`const { Client } = require('pg');
+const assert = require('node:assert');
+
+let db;
+async function setup() {
+  db = new Client({ host: '/var/run/postgresql', database: 'route' });
+  await db.connect();
+  await applyMigrations(db);          // the real migrations, not a fixture
+}
+
+// Every test runs inside a transaction that is always rolled back, so
+// the database is identical before and after, whatever the test did.
+async function test(name, fn) {
+  await db.query('begin');
+  try { await fn(); console.log('  pass:', name); }
+  catch (e) { console.log('  FAIL:', name, '-', e.message); }
+  finally { await db.query('rollback'); }
+}
+
+// rows before: 0
+//   pass: creates a user
+//   pass: rejects a duplicate email
+// rows after:  0   <- each test undid itself`} ],
+        tradeoff:`<p>Rollback isolation is fast and has one real limitation: the code under test cannot manage its own transactions, because a commit inside the test ends the wrapper. For most request handlers that is fine. For code that deliberately commits in stages, use a cheaper truncate between tests, or a fresh schema per test, and accept the slower run. Do not solve it by mocking the database, which gives up the only thing these tests were for.</p>`,
+        pitfall:"Sharing one database between tests that run in parallel without isolating them. The suite passes alone, fails in CI, passes on re-run, and the team learns to re-run rather than to trust it.",
+        exercise:`<p>Convert one mocked repository test to run against a real database with rollback isolation. Then deliberately break the schema — rename a column in a migration and not in the query — and confirm the test fails. Finally run the suite twice in a row and check the row count in the database is identical before and after.</p>`,
+        refs:[ ["Testcontainers","https://testcontainers.com/"] ] },
+
+      { id:"test-doubles", name:"Test doubles, and what not to mock",
+        depth:"build", core:true,
+        line:"Do not mock what you own, and assert on the result rather than on the calls.",
+        what:`<p>A double stands in for a real dependency. It is the right tool for things that are slow, non-deterministic, or outside your control. It is the wrong tool for your own code, because a mock of your own class encodes your current design into the test, and then every refactor breaks tests without any behaviour changing.</p>`,
+        use:`<p>A test mocks the repository and asserts that <code>save</code> was called once with a particular object. A later change batches two saves into one. The behaviour is identical and better, the test fails, and someone updates the assertion to match the new implementation. The test has never checked anything except that the code is written the way it is written.</p>`,
+        concepts:[
+          ["Stub","Returns canned answers. The honest default: it lets the test reach the code you care about."],
+          ["Fake","A real, working, simplified implementation, such as an in-memory repository. More work up front, and the one that holds up over refactors."],
+          ["Mock","Records calls so the test can assert on them. Couples the test to how the code works, not what it does."],
+          ["Do not mock what you own","Your own classes should be tested through their real behaviour. Double the things at the edge: third-party APIs, the clock, randomness, the network."],
+          ["State over interaction","Assert that the order ended up saved and correct, not that a particular method was called. The first survives refactoring; the second is the refactor's enemy."]
+        ],
+        how:`<p>Double at the system boundary and nowhere else. Build a thin interface around each third-party dependency, and provide a fake implementation of that interface for tests. The fake is written once and used everywhere, is easier to read than a page of mock setup, and it can enforce the real thing's rules, such as rejecting a duplicate idempotency key.</p>`,
+        code:[ {label:"A fake that enforces the real contract", code:`interface PaymentGateway:
+    charge(amount, currency, idempotency_key) -> Charge
+
+class FakePaymentGateway implements PaymentGateway:    # for tests
+    charges = {}
+    next_result = "success"
+
+    charge(amount, currency, key):
+        if key in charges:            # the real gateway does this too,
+            return charges[key]       # so the fake must as well
+        if next_result == "declined":
+            raise CardDeclined()
+        charges[key] = Charge(id = "ch_" + key, amount = amount)
+        return charges[key]
+
+# The test asserts on outcomes, not on calls.
+it("does not charge twice when the client retries"):
+    checkout(order, key = "k1")
+    checkout(order, key = "k1")
+    assert gateway.charges.length == 1          # state
+    assert order.reload().status == "paid"      # state
+    # not: assert gateway.charge.was_called_once()`} ],
+        tradeoff:`<p>A fake costs more to write than a mock and pays it back every time the code changes, because it tests behaviour rather than structure. Mocks are genuinely useful for one thing: asserting that something was <em>not</em> called, such as proving you did not charge the card when validation failed. That is a real behavioural claim and hard to express any other way. Use them for that and prefer state assertions everywhere else.</p>`,
+        pitfall:"A fake that is more forgiving than the real dependency. If the real payment gateway rejects a reused idempotency key and your fake happily returns a fresh charge, your tests prove the opposite of the truth.",
+        exercise:`<p>Find a test that asserts a method was called. Rewrite it to assert on the resulting state instead. Then refactor the implementation — inline the method, or batch the call — and check the new test still passes while the old one would not have.</p>`,
+        refs:[] },
+
+      { id:"flaky-tests", name:"Flaky tests and determinism",
+        depth:"build", core:false,
+        line:"A suite people re-run is a suite nobody believes, and four causes explain almost all of it.",
+        what:`<p>A flaky test fails sometimes with no code change. The real damage is not the failed build, it is that the team learns to re-run red builds, and then a genuine failure gets re-run too and shipped.</p>
+              <p>Nearly all flakiness comes from four sources: the wall clock, randomness, shared state, and test order. Each has a specific fix, and none of them is a retry.</p>`,
+        use:`<p>A subscription test passes every day and fails on the 29th, 30th and 31st. It builds its input from today's date, adds a month, and asserts the day of the month is unchanged. For most of the year that is true. The team re-runs the build on month-end and the test survives for years.</p>`,
+        concepts:[
+          ["The wall clock","Tests that call <code>now()</code> depend on when they run. Month ends, leap days, daylight-saving transitions and midnight are all real failure dates."],
+          ["Randomness","Unseeded random data means a test exercises a different case each run. It will eventually find a bug, on a day you cannot reproduce."],
+          ["Shared state","A cache, a module-level variable, a singleton or a row left behind. The test passes alone and fails in a suite."],
+          ["Order dependence","Test B only passes after test A has run. Hidden until someone runs one test, or the runner parallelises."],
+          ["Real waiting","<code>sleep(100)</code> to let something finish is a bet on a machine's speed. CI machines are slower and more variable than laptops."]
+        ],
+        how:`<p>Inject the clock as a dependency so a test can set it, seed every random generator and print the seed on failure, isolate shared state in setup rather than relying on previous tests, and randomise test order in CI so order dependence fails loudly instead of lying dormant. Replace every sleep with waiting on the actual condition, with a generous timeout.</p>`,
+        code:[ {label:"Node: a test that passes most days", lang:"js", code:`function renew(from) {                    // code under test
+  const d = new Date(from);
+  d.setMonth(d.getMonth() + 1);
+  return d;
+}
+
+// The test builds its input from the wall clock, then asserts that the
+// day of the month is unchanged after renewing.
+//
+//   2026-01-15 -> 2026-02-15  pass
+//   2026-01-29 -> 2026-03-01  FAIL
+//   2026-01-30 -> 2026-03-02  FAIL
+//   2026-01-31 -> 2026-03-03  FAIL
+//   2026-03-31 -> 2026-05-01  FAIL
+//   2026-05-31 -> 2026-07-01  FAIL
+//   2026-08-31 -> 2026-10-01  FAIL
+//
+// Six failures out of seven dates, and a green build on the 15th.
+
+// Deterministic: pin the clock and test both sides of the boundary.
+const FIXED = new Date('2026-01-31T00:00:00Z');
+assert.equal(renew(FIXED).toISOString().slice(0, 10), '2026-03-03');
+// Now the surprising behaviour is documented instead of intermittent,
+// and you get to decide whether 2026-03-03 is what the business wants.`} ],
+        tradeoff:`<p>Automatic retries make the build green and are sometimes the right short-term call, on a suite that is already untrusted and blocking a release. Treat them as a tourniquet: record every retry, so a flaky test is visible as a number rather than hidden by the mechanism that papers over it, and fix the top of that list every week. A retry policy with no visibility converts flakiness from a problem into a permanent condition.</p>`,
+        pitfall:"Fixing flakiness by widening the timeout. It converts an intermittent failure into a slower suite that still fails intermittently, and it hides the real cause, which is usually that the test is waiting on the wrong thing.",
+        exercise:`<p>Run your suite with randomised test order and in parallel. Whatever newly fails has an order or shared-state dependency that was always there. Then grep for direct calls to the current time in your code under test and count them: each one is a test you cannot make deterministic until the clock is injected.</p>`,
+        refs:[] },
+
+      { id:"contract-testing", name:"Contract testing between services",
+        depth:"understand", core:false,
+        line:"Worth real effort across teams, and mostly overhead inside one.",
+        what:`<p>When one service calls another, each side has tests that pass, and neither proves they still agree. The provider's tests use the provider's fixtures; the consumer's tests use the consumer's mocks. Both are green on the day the provider removes a field the consumer reads.</p>
+              <p>Contract testing fixes that by making the consumer's expectations into an artifact the provider verifies in its own build.</p>`,
+        use:`<p>An orders service drops <code>customer_email</code> because nothing in its own codebase uses it. The notification service reads it. Both test suites pass, the deploy goes out, and emails stop sending — silently, because the field is simply absent rather than an error.</p>`,
+        concepts:[
+          ["Consumer-driven contract","The consumer declares what it actually uses: these fields, these types, this status code. Not the provider's whole schema."],
+          ["The artifact","Generated from the consumer's own tests, so it describes real usage rather than an aspiration, and it cannot drift from the consumer's code."],
+          ["Provider verification","The provider replays every consumer's contract against a real instance in its own build, and fails before deploying a breaking change."],
+          ["The broker","A shared place where contracts live, with versions, so a provider knows which consumers are on which version and in which environment."],
+          ["Not a schema check","A schema says what could be returned. A contract says what somebody depends on, which is the smaller and more useful set."]
+        ],
+        how:`<p>Start only where you have the problem: two teams, two deploy cadences, and a breakage you can point at. The consumer writes tests against a stub that records the interactions; those recordings are published; the provider's pipeline verifies them. The valuable outcome is the provider's build failing on a change that would break a consumer it has never heard of.</p>
+              <p>With one team deploying everything together, an integration test that exercises both services directly gives you most of the same protection with none of the infrastructure.</p>`,
+        tradeoff:`<p>Contract tests cost a broker to run, a versioning discipline to maintain, and a build step on both sides. Against that, they are the only thing that lets two teams deploy independently without a shared staging environment and a coordination meeting. The honest rule: if your services deploy together, skip it and test them together. If they deploy independently and you have been burned by a field removal, it is one of the highest-value test types there is.</p>`,
+        pitfall:"Writing the contract from the provider's schema rather than from the consumer's usage. It then describes everything the provider could return, so the provider can never change anything, which is the opposite of the intent.",
+        exercise:`<p>Pick a service you call. Write down the exact fields your code reads from each of its endpoints, which is usually far fewer than the response contains. That list is the contract. Then ask the owning team whether anything on it is deprecated, and note how long the answer takes.</p>`,
+        refs:[ ["Pact: consumer-driven contract testing","https://docs.pact.io/"] ] },
+
+      { id:"load-testing", name:"Load, stress and soak testing",
+        depth:"understand", core:false,
+        line:"Three different questions, and percentiles rather than averages for all of them.",
+        what:`<p>Load, stress and soak are not intensities of the same test. They answer different questions: can it handle the expected traffic, where does it break, and does it survive staying up. Running one and claiming the others is how a service passes its testing and falls over in week two.</p>`,
+        use:`<p>A service passes a load test at 500 requests a second and is deployed. It falls over on day nine. The load test ran for four minutes; the leak needed six hours to exhaust memory. A soak test at a quarter of the load would have found it, and the load test could never have.</p>`,
+        concepts:[
+          ["Load test","Expected traffic, for long enough to be steady. Answers: does it meet its latency target at the volume we actually get?"],
+          ["Stress test","Increase until something breaks. Answers: where is the limit, what breaks first, and does it degrade or collapse?"],
+          ["Soak test","Moderate load for hours. Answers: do we leak memory, connections, descriptors or disk?"],
+          ["Open versus closed model","A closed model keeps N virtual users, each waiting for a response, so slowness automatically reduces load and hides the problem. An open model sends at a fixed rate regardless, which is how real traffic behaves."],
+          ["Percentiles","The average hides everything. Report p50, p95 and p99, and remember that if a page makes ten calls, a p99 per call is roughly a one-in-ten chance of a slow page."]
+        ],
+        how:`<p>Define the target before the test, as a number: a rate, a latency at a percentile, and an error budget. "It should be fast" is not testable. Then run against something production-like with production-like data volumes, because a query against a thousand rows is a different query.</p>
+              <p>Read the result as a curve, not a verdict. The number you want is where latency starts climbing while throughput stops rising: that is your real capacity, and it is almost always lower than the point at which errors begin.</p>`,
+        code:[ {label:"What the result should look like", lang:"text", code:`Target: 300 req/s sustained, p99 under 400ms, error rate under 0.1%
+
+rate    p50     p95     p99     errors   notes
+100     22ms    48ms     91ms   0.00%
+200     24ms    55ms    110ms   0.00%
+300     27ms    71ms    189ms   0.00%    <- target met
+400     41ms   180ms    620ms   0.00%    <- latency climbing, no errors
+500     95ms   710ms   2100ms   0.02%
+600    310ms  2400ms   6800ms   4.10%    <- collapse
+
+Real capacity is ~350, not 600. The service stops meeting its target
+long before it starts returning errors, and only the percentile curve
+shows that. An average at 500 req/s would read about 140ms and look fine.`} ],
+        tradeoff:`<p>Testing against production gives the truest answer and risks an outage; testing against a scaled-down copy is safe and gives numbers that do not transfer, because bottlenecks move when sizes change. The usual compromise is a production-sized environment used briefly, plus continuous light load testing in CI to catch regressions in relative terms. If you must test in production, start from a small share of traffic and have a way to stop within seconds.</p>`,
+        pitfall:"Reporting the average response time. A service with a p50 of 20ms and a p99 of 4 seconds has an average near 60ms and one in a hundred users having a terrible time, which the single number is designed not to show.",
+        exercise:`<p>Pick one endpoint and write its target as three numbers. Run an open-model load test at increasing rates until p99 breaches the target, and record the table above. Then run the same traffic at half that rate for two hours and watch memory, open connections and descriptor count. If any of the three climbs steadily, you have found something a short test never would.</p>`,
+        refs:[] }
+
+    ],
+    after:[
+      ["Choose a level per risk","Logic in unit tests, SQL against a real database, status codes through real HTTP."],
+      ["Test the paths people skip","Unauthenticated, unauthorised, missing and malformed, for every endpoint."],
+      ["Isolate tests properly","A transaction per test, rolled back, so order and parallelism stop mattering."],
+      ["Double only at the edge","Fakes for third parties, state assertions over call assertions."],
+      ["Make the suite believable","Injected clock, seeded randomness, randomised order, no sleeps."],
+      ["Read a load test","A percentile curve and a real capacity number, not an average and a verdict."]
+    ],
+    sources:`<p>Verified while writing, in this container: the per-test rollback harness was run against the live PostgreSQL 16.15 with the <code>pg</code> client on Node 22, and the output in the snippet (zero rows before, two passing tests, zero rows after) is real. The flaky date test was run across seven dates, and the six failures shown are its actual output: <code>setMonth</code> on 29, 30 or 31 January rolls past the end of February, so the test passes on the 15th and fails at month end.</p>
+      <p>The load-test table is illustrative and is labelled as a shape to aim for, not a measurement: it describes what a percentile curve looks like when a service degrades before it errors.</p>
+      <p>References, not retrieved while writing: the Testcontainers and Pact sites.</p>` }
 ];
 
 const DEPTH = { understand:"Understand", build:"Build" };
