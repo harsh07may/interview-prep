@@ -2278,7 +2278,338 @@ log.info("request", fields=scrub(request_body))
     ],
     sources:`<p>Retrieved while writing: <a href="https://datatracker.ietf.org/doc/html/draft-ietf-oauth-v2-1-13" target="_blank" rel="noopener">draft-ietf-oauth-v2-1-13</a>, the OAuth 2.1 framework. The normative wording quoted in that topic is copied from it, and it is narrower than the usual summary: PKCE is required of public clients, and of other clients unless the authorization server has reasonable assurance the client mitigates code injection another way. OAuth 2.1 is still an Internet-Draft, which the topic says.</p>
       <p>Verified by running, on Node 22 with <code>jsonwebtoken</code> 9.0.3: all four JWT cases. Two of them came out against the conventional advice and changed what this stage emphasises. <code>alg:none</code> was rejected whether or not algorithms were pinned, and an RS256-to-HS256 confusion forgery was rejected too, because the library infers acceptable algorithms from the key type. What <em>was</em> accepted is a correctly signed, unexpired token minted for a different audience, whenever <code>audience</code> was not passed. The topic leads with that rather than with <code>alg:none</code>.</p>
-      <p>References, not retrieved while writing: the OWASP cheat sheets and API Security Top 10 pages, RFC 7519, RFC 8725, RFC 9106, RFC 8705, the cookie draft, OpenID Connect Core, and the MDN pages on CORS and CSP.</p>` }
+      <p>References, not retrieved while writing: the OWASP cheat sheets and API Security Top 10 pages, RFC 7519, RFC 8725, RFC 9106, RFC 8705, the cookie draft, OpenID Connect Core, and the MDN pages on CORS and CSP.</p>` },
+
+{ num:8, id:"caching", phase:3, name:"Caching and performance",
+    intro:"Making it fast, and knowing which number to look at before you try.",
+    topics:[
+
+      { id:"cache-layers", name:"Cache layers and the CDN",
+        depth:"understand", core:true,
+        line:"Five places a response can be held, each cheaper and staler than the last.",
+        what:`<p>A cache trades freshness for cost. There are five places to make that trade, and they are not alternatives: a well-built system uses several, with the cheapest and furthest from you holding the most static things.</p>
+              <p>Choosing the layer is most of the decision. A value cached in the browser costs you nothing and can be wrong for a day; the same value cached in your process costs a lookup and can be wrong for a second.</p>`,
+        use:`<p>A product page is slow. The product image belongs on a CDN and should never reach you again. The rendered HTML can sit in a shared cache for a minute. The product record belongs in a distributed cache so every instance shares it. The user's own basket must not be cached at all. One page, four different answers, and getting them wrong in either direction is either slow or incorrect.</p>`,
+        concepts:[
+          ["Browser","Free, closest to the user, and uncontrollable once sent: you cannot invalidate it, only wait for it to expire. Use short lifetimes with revalidation for anything that changes."],
+          ["CDN","A shared cache near the user. Enormous leverage for static assets and public responses, and it can serve a cached copy while your origin is down."],
+          ["Reverse proxy","A shared cache at your edge. Useful for public responses that are expensive to produce and identical for everyone."],
+          ["In-process","A map in your service. The fastest possible, and per-instance, so instances disagree and the hit rate is divided by the instance count."],
+          ["Distributed","Redis or similar, shared by every instance. One source of cached truth, a network hop per lookup, and a new dependency that can fail."]
+        ],
+        how:`<p>Work from the outside in. Anything identical for every user and rarely changing belongs on the CDN with a long lifetime and a versioned URL, so a change is a new URL rather than an invalidation. Anything identical for every user and changing often belongs in a shared cache with a short TTL. Anything per-user belongs in a distributed cache keyed by user, or nowhere.</p>
+              <p>Mark everything else explicitly uncacheable. The dangerous case is a response that varies by user being stored by a shared cache: one user then sees another's data, and it is a serious incident rather than a stale page.</p>`,
+        tradeoff:`<p>In-process caching is the fastest and the least honest: with ten instances you have ten caches, so your measured hit rate is optimistic, invalidation reaches one instance, and two users can see different answers at the same moment. A distributed cache costs a round trip and removes all three problems. Use in-process only for data that is genuinely immutable or where disagreement between instances is harmless, such as a parsed configuration file or a compiled template.</p>`,
+        pitfall:"Letting a shared cache store an authenticated response. If the response varies by user and the cache key does not, the next user gets the previous user's data. Mark per-user responses private, and set Vary correctly on anything that differs by header.",
+        exercise:`<p>Take one page and list every piece of data it needs. For each, write down the layer it should be cached at and its acceptable staleness in seconds. Then check what your service actually does today: the gap is usually a static asset with no caching at all, and a per-user response with no <code>private</code>.</p>`,
+        refs:[] },
+
+      { id:"cache-strategies", name:"Strategies: cache-aside, write-through and write-behind",
+        depth:"build", core:true,
+        line:"Cache-aside is the default; the other two are narrower than their equal billing suggests.",
+        what:`<p>Three patterns get listed together as if they were peers. They are not. Cache-aside is what almost everyone should use almost always. Write-through is occasionally right. Write-behind is rare, risky, and included here mainly so you can recognise when someone is proposing it.</p>`,
+        use:`<p>An order detail endpoint is read fifty times for every write. Cache-aside means the first read after a change pays for the query and the next forty-nine do not, and if the cache is unavailable, everything still works slightly slower. That last property is why it is the default.</p>`,
+        concepts:[
+          ["Cache-aside","The application checks the cache, and on a miss loads from the database and stores the result. The cache is an optimisation the application can live without."],
+          ["Write-through","Writes go to the cache and the database together. The cache is always warm and every write pays for both."],
+          ["Write-behind","Writes go to the cache and are flushed to the database later. Fast writes, and acknowledged data that is not yet durable."],
+          ["Read-through","Like cache-aside, but the cache library does the loading. Tidier code, and the loading logic now lives in cache configuration."],
+          ["Failure behaviour","The property that matters most: with cache-aside, a cache outage is a slowdown. With write-behind, a cache outage is data loss."]
+        ],
+        how:`<p>Use cache-aside, with a TTL on everything and explicit invalidation on write. Treat every cache call as optional: wrap it so a cache error logs and falls through to the database rather than failing the request. A cache that can take your service down has made things worse.</p>`,
+        code:[ {label:"Cache-aside, written so the cache can fail", code:`def get_order(id):
+    key = f"order:v2:{id}"
+
+    try:
+        hit = cache.get(key)
+        if hit is not None:
+            return decode(hit)
+    except CacheError:
+        metrics.increment("cache.error")      # degrade, do not fail
+        hit = None
+
+    order = db.find_order(id)                 # the source of truth
+    if order is not None:
+        try:
+            cache.set(key, encode(order), ttl=300)
+        except CacheError:
+            pass                              # still return the answer
+
+    return order
+
+def update_order(id, changes):
+    order = db.update_order(id, changes)      # database first
+    try:
+        cache.delete(f"order:v2:{id}")        # then invalidate
+    except CacheError:
+        pass                   # the TTL is the backstop for exactly this
+    return order`} ],
+        tradeoff:`<p>Delete on write, as above, is simpler and briefly slower on the next read. Updating the cache on write keeps it warm and introduces a race: two concurrent writers can write their values to the cache in the opposite order from the database, leaving the cache permanently disagreeing with the database until the TTL expires. Delete is the safer default, and the TTL is there to limit the damage of any invalidation you miss. Write-behind is the one to argue against: it acknowledges writes that are not durable, so a cache node failure loses accepted data, which is almost never an acceptable trade for an application database.</p>`,
+        pitfall:"Invalidating the cache before writing the database. A concurrent reader repopulates the cache with the old value in the gap, and the stale entry then survives for the whole TTL. Write first, then invalidate.",
+        exercise:`<p>Add cache-aside to one read-heavy endpoint, with a TTL and invalidation on write. Then kill the cache and confirm the endpoint still serves correct results, more slowly. If it returns errors, the cache is now a dependency rather than an optimisation, and that is the bug.</p>`,
+        refs:[] },
+
+      { id:"cache-keys", name:"Keys, TTLs and invalidation",
+        depth:"build", core:false,
+        line:"Naming a key is easy; knowing every key to delete when something changes is the hard part.",
+        what:`<p>The famous joke about cache invalidation being hard is specifically about this: a value derived from several inputs is cached under one key, and when any input changes you must know which keys became wrong. For anything beyond one record, you usually do not.</p>
+              <p>So the practical approach is to lean on TTLs for correctness and treat explicit invalidation as an optimisation that is allowed to miss.</p>`,
+        use:`<p>You cache a customer's dashboard summary, built from their orders, their balance and a pricing table. The pricing table changes. Which keys are now wrong? Every customer's summary. If the only tool is key-by-key deletion, you need a list of every customer, and if the TTL is an hour you could instead have accepted an hour of staleness and done nothing.</p>`,
+        concepts:[
+          ["Key structure","A prefix, a version, an entity and an identifier: <code>order:v2:8841</code>. Readable in a key dump, and greppable in code."],
+          ["Version in the key","Bump the version when the stored shape changes, and every old entry is orphaned instantly and expires on its own. This is the cheapest mass invalidation there is."],
+          ["TTL as correctness","The TTL is the guarantee that a mistake self-heals. Any cache without one holds a wrong value forever the first time invalidation is missed."],
+          ["Derived values","Anything built from several inputs cannot be invalidated precisely without tracking the dependencies. Usually not worth it: use a short TTL instead."],
+          ["Never cache nothing","A missing key and a key holding a null mean different things. If a miss is expensive to compute, cache the negative result too, briefly."]
+        ],
+        how:`<p>Give every key a version segment, and change it in the same commit that changes the shape of what is stored. This removes the entire class of deployment bugs where new code reads an old cached structure, and it makes a full invalidation a one-line change rather than a flush.</p>
+              <p>Set a TTL on every entry, including ones you also invalidate explicitly. Choose it by asking how long you could tolerate being wrong, which is usually much longer than instinct suggests.</p>`,
+        code:[ {label:"Versioned keys, and what they buy", lang:"text", code:`order:v2:8841                 one record
+user:v1:42:permissions        a derived set
+pricing:v3:IN:2026-11         a slow-changing table, by region and month
+
+Deploy changes the cached shape:
+    order:v2:*  ->  order:v3:*      one constant, changed in the commit
+
+Every v2 entry is now unreachable and expires on its own. No flush, no
+mass delete, no window where new code reads an old structure.
+
+TTL by how wrong you can afford to be:
+    pricing table        1 hour     changes rarely, staleness visible
+    order record         5 minutes  invalidated on write, TTL is backup
+    permissions         30 seconds  security-relevant, keep it short
+    negative result     10 seconds  stop a missing id hammering the DB`} ],
+        tradeoff:`<p>A long TTL gives a high hit rate and more staleness; a short one is fresher and shifts load back to the database. The instinct is to shorten the TTL until staleness is imperceptible, which often means the cache barely helps. Invert it: ask what the business cost of being one minute out of date is, and you will usually find the answer is nothing, in which case a minute of staleness buys most of the benefit with none of the invalidation complexity.</p>`,
+        pitfall:"Caching without a TTL because you invalidate explicitly. Every invalidation path has a case it misses — a batch job, a manual fix, a code path added later — and without a TTL that wrong value is permanent.",
+        exercise:`<p>List your cache keys and check that each has a version segment and a TTL. Then pick a derived value and try to enumerate every input that could make it wrong. If the list is longer than two, replace the precise invalidation with a short TTL and delete the code.</p>`,
+        refs:[] },
+
+      { id:"stampedes", name:"Stampedes and hot keys",
+        depth:"build", core:false,
+        line:"One popular key expiring sends every concurrent request to the database at the same instant.",
+        what:`<p>Cache-aside has a specific failure at scale. A key that serves a thousand requests a second expires. Every request in flight misses, every one of them queries the database, and the database receives a thousand copies of a query it had been answering once every few minutes.</p>
+              <p>The cache was absorbing that load, and the moment it stops is exactly when the load arrives all at once.</p>`,
+        use:`<p>A homepage feed is cached for five minutes and read two thousand times a second. Every five minutes the database gets two thousand simultaneous copies of an expensive aggregate query. Latency spikes on a five-minute cycle, and because it recovers on its own, it is dismissed as noise for months.</p>`,
+        concepts:[
+          ["Stampede","Concurrent misses on one key all recomputing the same value. The cost is the concurrency, not the miss."],
+          ["Single-flight","The first miss does the work; every other caller waits for that same result. One database query regardless of how many are waiting."],
+          ["TTL jitter","Add a random fraction to each TTL so keys written together do not expire together. Essential after a cache restart or a bulk warm-up."],
+          ["Early refresh","Recompute slightly before expiry, in the background, while still serving the old value. Nobody ever waits on a miss."],
+          ["Hot key","One key so popular it saturates a single cache node. Sharding does not help, because the key hashes to one place."]
+        ],
+        how:`<p>Single-flight is the fix that matters, and in most languages it is a few lines: keep a map of in-flight loads, and have a second caller for the same key await the first one's promise or future instead of starting its own.</p>`,
+        code:[ {label:"Node: measured, with and without", lang:"js", code:`// Naive cache-aside: every concurrent miss loads independently.
+async function naive(key) {
+  if (cache.has(key)) return cache.get(key);
+  const v = await loadFromDb();
+  cache.set(key, v);
+  return v;
+}
+
+// Single-flight: the first miss creates the promise, the rest await it.
+const inflight = new Map();
+async function singleFlight(key) {
+  if (cache.has(key)) return cache.get(key);
+  if (inflight.has(key)) return inflight.get(key);
+  const p = loadFromDb().then(v => {
+    cache.set(key, v); inflight.delete(key); return v;
+  });
+  inflight.set(key, p);
+  return p;
+}
+
+// 200 concurrent requests for one expired key:
+//   naive cache-aside:  200 database calls
+//   single-flight:        1 database call
+
+// Note: this is per instance. Across ten instances you get ten calls,
+// not one, which is fine. A distributed lock to make it exactly one is
+// usually not worth the complexity it adds.`} ],
+        tradeoff:`<p>Single-flight is cheap and bounds the damage to one query per instance. Early refresh is better again — nobody waits at all — and costs a background mechanism plus recomputation of values that may never be read. Jitter is nearly free and only helps with correlated expiry, which is a real problem after a deploy or a cache flush. Take single-flight and jitter as defaults; add early refresh only for the handful of keys that are both expensive and hot.</p>`,
+        pitfall:"Warming the whole cache at startup with one TTL. Every key then expires in the same second, and you have built a scheduled stampede across your entire key space rather than on one key.",
+        exercise:`<p>Reproduce the numbers above against your own cache: fire a few hundred concurrent requests at an endpoint whose key you have just deleted, and count the database queries. Add single-flight and count again. Then add jitter to your TTLs and check that a bulk warm-up no longer produces a synchronised expiry.</p>`,
+        refs:[] },
+
+      { id:"http-caching", name:"HTTP caching and ETags",
+        depth:"build", core:true,
+        line:"Let the client and the CDN skip the work, and ask you only whether anything changed.",
+        what:`<p>HTTP has a caching system built in, and most APIs ignore it. Used properly, the browser and the CDN hold the response, and when they do check back, your server can answer "unchanged" in a few bytes rather than regenerating and resending the whole thing.</p>
+              <p>Two mechanisms: a lifetime, after which the cache must check, and a validator, which makes that check cheap.</p>`,
+        use:`<p>A mobile app refreshes an order list on every screen open. The list rarely changes. With an <code>ETag</code>, the refresh sends the validator and gets back a 304 with an empty body: no serialization, no query if you can compute the validator cheaply, and almost no bytes over a mobile connection.</p>`,
+        concepts:[
+          ["Cache-Control","The lifetime and the rules. <code>max-age</code> is how long it may be used without asking; <code>private</code> means only the browser may store it; <code>no-store</code> means nobody may."],
+          ["ETag","An opaque identifier for this version of the response. The client sends it back in <code>If-None-Match</code> and you answer 304 if it still matches."],
+          ["Last-Modified","The weaker validator, with one-second resolution. Use an ETag when you can."],
+          ["private versus public","The most consequential flag. <code>public</code> lets a shared cache store the response, which is wrong for anything user-specific."],
+          ["Vary","Names the request headers that change the response. Without it, a shared cache can serve one variant to everyone."]
+        ],
+        how:`<p>Set <code>Cache-Control</code> on every response, deliberately, including the ones you do not want cached. Add an <code>ETag</code> to anything expensive and frequently re-fetched, and handle <code>If-None-Match</code> by comparing before you do the work.</p>`,
+        code:[ {label:"Node: a real revalidation exchange", lang:"js", code:`const tag = etagOf(body);
+res.setHeader('ETag', tag);
+res.setHeader('Cache-Control', 'private, max-age=0, must-revalidate');
+if (req.headers['if-none-match'] === tag) { res.writeHead(304); return res.end(); }
+res.writeHead(200, { 'Content-Type': 'application/json' });
+res.end(body);
+
+// first request          200 "49oJqKmoB5tQJNCn" 24 bytes
+// revalidate, unchanged  304 "49oJqKmoB5tQJNCn"  0 bytes
+// revalidate, changed    200 "yF9UEuXNfmp-opBG" 27 bytes
+
+// The 304 carries no body at all. On a list endpoint returning tens of
+// kilobytes, that is the whole payload saved on every unchanged poll.`} ],
+        tradeoff:`<p>An ETag computed from the serialized body saves bandwidth and not server work: you had to build the response to hash it. An ETag derived from something cheap — a row version, an <code>updated_at</code>, a monotonic counter — saves the work too, because you can answer 304 before querying anything substantial. The cheap validator is worth designing for. Where neither is available, <code>max-age</code> alone still helps, and you accept that clients will be stale for that long.</p>`,
+        pitfall:"Marking a user-specific response public. A CDN or corporate proxy stores one user's data and serves it to the next person who asks for that URL, which is a data breach caused by a caching header.",
+        exercise:`<p>Pick a read endpoint and add an <code>ETag</code>, then confirm with curl that a second request carrying <code>If-None-Match</code> returns 304 with an empty body. Then audit every endpoint for <code>Cache-Control</code>: anything user-specific must say <code>private</code>, and anything sensitive must say <code>no-store</code>.</p>`,
+        refs:[ ["RFC 9111: HTTP Caching","https://www.rfc-editor.org/rfc/rfc9111.html"] ] },
+
+      { id:"redis", name:"Redis beyond caching",
+        depth:"build", core:false,
+        line:"Five data types, each the right answer to a different problem, and one thread serving all of them.",
+        what:`<p>Redis is usually introduced as a cache, which undersells it. It is a set of data structures available over the network, with atomic operations on them. Knowing which structure fits a problem turns several awkward database designs into one command.</p>
+              <p>It is also single-threaded for command execution, which is what makes those operations atomic and means one slow command blocks every other client.</p>`,
+        use:`<p>You need a leaderboard: top ten by score, a player's own rank, updated constantly. In a relational database that is a sort over a large table, or a denormalized rank column with a consistency problem. In Redis it is a sorted set, and both queries are single commands.</p>`,
+        concepts:[
+          ["String with TTL","A value and an expiry. Sessions, cached responses, and anything that should disappear on its own."],
+          ["Hash","Fields under one key, updatable individually. A shopping basket, or an object you update field by field."],
+          ["Set","Unordered unique members, with union and intersection. Online users, tags, deduplication."],
+          ["Sorted set","Members ordered by score, with rank and range queries. Leaderboards, time-ordered feeds, delayed-job queues keyed by due time."],
+          ["Atomic primitives","<code>INCR</code>, and <code>SET</code> with <code>NX</code>, are atomic by nature of the single thread. Counters and lock acquisition without a transaction."]
+        ],
+        how:`<p>Pick the structure that matches the access pattern rather than serializing a blob into a string. Use Lua for any sequence that must be atomic as a whole, as the rate limiter in the API stage does. And set a TTL on nearly everything: Redis holds data in memory, so a key space that only grows will eventually hit <code>maxmemory</code> and start evicting things you needed.</p>`,
+        code:[ {label:"Redis 7: each type doing its job", lang:"bash", code:`SET session:42 "opaque" EX 900      # a session that expires on its own
+TTL session:42
+# 900
+
+INCR views:page:7                   # atomic, no read-modify-write
+# 1
+
+HSET cart:42 sku-a 2 sku-b 1        # fields you can update one at a time
+HGETALL cart:42
+# sku-a 2 sku-b 1
+
+SADD online u1 u2 u1                # a set: the duplicate is a no-op
+SCARD online
+# 2
+
+ZADD top 10 alice 30 bob 20 carol   # a leaderboard
+ZREVRANGE top 0 1 WITHSCORES
+# bob 30 carol 20
+
+SET lock:job owner1 NX EX 30        # acquire: OK
+SET lock:job owner2 NX EX 30        # second attempt: nil, already held`} ],
+        tradeoff:`<p>Redis is fast because it keeps everything in memory and executes commands on one thread. That is also its shape of failure: memory is your capacity limit, and a single expensive command stalls every other client. <code>KEYS</code> on a large key space is the classic way to freeze a production Redis, and the reason <code>SCAN</code> exists. Persistence is configurable, and the honest default position is to treat Redis as a cache that can be lost, not as a database; if you need durability, be explicit about which mode you run and test what a restart actually loses.</p>`,
+        pitfall:"Running KEYS in production to find keys matching a pattern. It walks the entire key space on the one thread that serves everything else, so on a large instance it is an outage. Use SCAN, which does the same job in interruptible pieces.",
+        exercise:`<p>Take something you currently store as a serialized blob in Redis and model it with the right structure instead: a hash if you update fields, a sorted set if you need order or rank. Measure the bytes transferred for a single-field update before and after. Then check whether every key in your instance has a TTL, and what your <code>maxmemory-policy</code> does when it fills.</p>`,
+        refs:[ ["Redis: data types","https://redis.io/docs/latest/develop/data-types/"] ] },
+
+      { id:"bottleneck", name:"Finding the bottleneck: profiling and percentiles",
+        depth:"build", core:false,
+        line:"Measure first. The slow part is reliably not the part you assumed.",
+        what:`<p>Performance work done without measurement is guessing, and the guess is usually wrong, because the slow part is rarely the complicated part. It is the extra query in a loop, the handshake you are paying on every call, the JSON being serialized twice, or the lock everything is queueing behind.</p>
+              <p>The first job is not to make anything faster. It is to find out where the time goes.</p>`,
+        use:`<p>A team spends a sprint optimising a pricing algorithm because it looks expensive. A profile taken afterwards shows the algorithm was 4% of the request and the remaining 96% was an N+1 query behind an ORM relation. The sprint produced a measurable improvement of nothing.</p>`,
+        concepts:[
+          ["Percentiles, not averages","The average is dominated by the fast majority. Report p50, p95 and p99; the p99 is a real user's experience, repeated all day."],
+          ["Timers at boundaries","Instrument every outbound call: database, cache, each third party. Most request time is spent waiting for something else."],
+          ["CPU profile versus wait","A CPU profile shows where cycles go and is silent about blocking. If a request takes 400ms and uses 8ms of CPU, the profile is the wrong tool."],
+          ["Query count","Queries per request catches N+1 faster than any profiler, and you can assert on it in a test."],
+          ["Representative data","A profile against a thousand rows tells you nothing about a million. Plans change, caches behave differently, and the bottleneck moves."]
+        ],
+        how:`<p>Work top down. Start with per-endpoint percentiles to find which endpoint, then a breakdown of that endpoint's time by component, then a profile of whichever component dominates. Resist starting at the profiler: it answers a narrow question well and will happily tell you about the hottest function in a request that is 95% idle.</p>
+              <p>Then record the number before and after. "It feels faster" is not a result, and it is how optimisations that made things slower stay in the codebase.</p>`,
+        tradeoff:`<p>Continuous profiling in production catches what synthetic tests never reproduce, at the cost of a small constant overhead and another system to run. Profiling in a load test is free of production risk and only ever shows you the behaviour you thought to simulate. For most teams, per-endpoint percentile metrics plus the ability to profile on demand is the right place to stop, and continuous profiling earns its keep once the obvious wins are gone.</p>`,
+        pitfall:"Optimising something you measured in isolation. A function that takes 50ms in a microbenchmark may take 2ms in production because its inputs are cached and warm, and the benchmark will happily guide you into making the wrong thing faster.",
+        exercise:`<p>Pick your slowest endpoint by p99. Break its latency into database, cache, outbound calls and your own code, and write down four numbers that add up to the total. Whichever dominates is the only thing worth working on, and the exercise usually ends with a different answer from the one you expected.</p>`,
+        refs:[] },
+
+      { id:"memory-gc", name:"Memory, GC and leaks",
+        depth:"understand", core:false,
+        line:"A long-running process shows you leaks a request-scoped mental model never predicts.",
+        what:`<p>A short script can leak as much as it likes and then exit. A server runs for weeks, so anything that grows without bound eventually fills memory, and the ending is either a garbage collector consuming all the CPU or the kernel killing the process with no stack trace.</p>
+              <p>In a managed language a leak is not unreachable memory; it is memory that is still reachable and should not be. Something is holding a reference.</p>`,
+        use:`<p>A service is restarted by its orchestrator every few hours with exit code 137 and nothing in the logs. The cause is a <code>Map</code> used as a cache, keyed by user id, with no eviction. It is correct, it is fast, and it grows for as long as new users arrive.</p>`,
+        concepts:[
+          ["Stack and heap","Local values live on the stack and vanish on return. Anything that outlives a call is on the heap and lives until nothing refers to it."],
+          ["Reachability","A collector frees what cannot be reached. A reference from a long-lived structure keeps an object alive forever, however finished with it you are."],
+          ["The four leak shapes","An unbounded cache or map; a closure that captures more than it needs; a listener or subscription never removed; a collection appended to on every request."],
+          ["Pause time","Collection is work. A large live set means longer pauses, which show up as latency spikes rather than as a memory alarm."],
+          ["RSS versus heap used","Resident memory includes what the runtime has reserved and not returned. A flat heap with rising RSS is usually fragmentation or native allocations."]
+        ],
+        how:`<p>Put a bound on every cache, with eviction, before it is a problem; a bounded cache with a mediocre hit rate is strictly better than an unbounded one. Remove listeners and subscriptions in the same place you add them. Then watch the shape of the memory graph over days rather than minutes: a sawtooth is healthy collection, a staircase that never returns to its previous floor is a leak.</p>`,
+        code:[ {label:"Node: the commonest leak, measured", lang:"js", code:`const mb = () => (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(1);
+
+// A cache with no bound. Correct, fast, and it never gives anything back.
+const cache = new Map();
+function handleRequest(i) {
+  cache.set(\`user:\${i}\`, { id: i, profile: 'x'.repeat(1024) });
+  return cache.get(\`user:\${i}\`);
+}
+
+console.log('heap at start:', mb(), 'MB');
+for (let i = 0; i < 200_000; i++) handleRequest(i);
+console.log('after 200k requests:', mb(), 'MB  entries:', cache.size);
+
+// heap at start: 3.5 MB
+// after 200k requests: 73.7 MB  entries: 200000
+
+// Bounded: evict the oldest once the limit is reached. The entry count
+// is then constant no matter how many requests pass through.
+if (bounded.size >= LIMIT) bounded.delete(bounded.keys().next().value);
+bounded.set(key, value);`} ],
+        tradeoff:`<p>A bigger heap limit postpones the problem and makes each collection pause longer, so a service tuned for throughput by raising the heap can get worse tail latency in exchange. Eviction policies trade differently too: least-recently-used is a good default, a simple size cap is cheaper, and time-based expiry bounds staleness as well as memory. The one option that is not a trade is leaving a cache unbounded, which chooses the worst outcome of all of them eventually.</p>`,
+        pitfall:"Diagnosing a leak from a few minutes of data. Memory in a managed runtime rises and falls between collections, so a short window always looks alarming or always looks fine. Judge from the floor of the sawtooth over hours.",
+        exercise:`<p>Run your service under steady load for an hour and plot heap used and RSS. If the floor of the graph rises, take two heap snapshots an hour apart and compare retained sizes: whatever grew is your leak. Then find every unbounded collection in the codebase and give each one a limit.</p>`,
+        refs:[] },
+
+      { id:"tail-latency", name:"Why p99 goes bad before CPU does",
+        depth:"understand", core:false,
+        line:"Queueing, not capacity: the wait explodes long before the resource is full.",
+        what:`<p>Teams add capacity when a resource is near 100% and are surprised that latency was already terrible at 80%. The reason is queueing: when work arrives at random times, the wait to be served does not rise linearly with utilisation, it rises sharply, and it goes to infinity as utilisation approaches one.</p>
+              <p>This is why a server at 90% CPU feels broken while one at 50% feels instant, with the same code and the same service time.</p>`,
+        use:`<p>A service averages 20ms of work per request. At 50% utilisation requests complete in about 40ms. At 90% the same work takes about 200ms, and nothing has changed except arrival rate. An alert set at 95% CPU fires long after users have noticed.</p>`,
+        concepts:[
+          ["Utilisation","The fraction of time the resource is busy. Applies to CPU, a thread pool, a connection pool and a single-threaded event loop alike."],
+          ["Queueing","Arrivals are not evenly spaced, so even below full capacity a request often finds the resource busy. The wait grows roughly as utilisation over one minus utilisation."],
+          ["Little's law","Concurrency equals arrival rate times time in system. Useful for sizing: 200 requests a second at 20ms each needs about 4 concurrent slots."],
+          ["Tail amplification","A page making 10 calls, each with a p99 of 200ms, has roughly a two-in-three chance of containing at least one slow call."],
+          ["Headroom","The reason to run at 60% rather than 90%. The spare capacity is buying predictable latency, not sitting idle."]
+        ],
+        how:`<p>Set alerts on latency percentiles, not on utilisation, because the percentile is what the user experiences and it moves first. Size for a target utilisation well under full, and treat anything above roughly 70% sustained as a signal to add capacity rather than a sign of efficiency.</p>
+              <p>The standard single-server queueing model gives the shape. It is a model, not a measurement, and the shape is the point:</p>`,
+        code:[ {label:"The wait, as utilisation climbs", lang:"text", code:`Service time 20ms. Mean wait = utilisation / (1 - utilisation) x 20ms.
+
+util   mean wait   total latency
+50%      20ms         40ms
+70%      47ms         67ms
+80%      80ms        100ms
+90%     180ms        200ms
+95%     380ms        400ms
+98%     980ms       1000ms
+
+From 50% to 98% utilisation the work per request does not change at
+all, and latency grows 25 times. This is the M/M/1 model, so the
+numbers are a shape rather than a prediction for your service; real
+systems are worse, because arrivals are burstier than the model.`} ],
+        tradeoff:`<p>Running at low utilisation gives predictable latency and costs money for capacity that is idle most of the time. Running hot is efficient on paper and converts every small traffic spike into a latency incident. The balance depends on how quickly you can add capacity: with autoscaling that reacts in a minute you can run closer to the edge; with fixed capacity you need the headroom permanently. Either way, pick the target from a latency objective, not from a tidy-looking utilisation number.</p>`,
+        pitfall:"Treating high CPU utilisation as the goal of efficiency work. A service pinned at 95% has no capacity to absorb a burst, so its tail latency is bad continuously and catastrophic occasionally.",
+        exercise:`<p>Take the load test from the testing stage and plot p99 against throughput rather than against time. Find the rate at which p99 starts to climb steeply: that, not the rate at which errors begin, is your usable capacity. Compare it with the utilisation at that point, which will be lower than you expect.</p>`,
+        refs:[] }
+
+    ],
+    after:[
+      ["Place a cache deliberately","You can say which layer each piece of data belongs in and how stale it may be."],
+      ["Write cache-aside safely","Database first, then invalidate, with a TTL as the backstop and a cache that may fail."],
+      ["Version your keys","A shape change is a constant change, not a flush."],
+      ["Stop a stampede","Single-flight and jitter, with the numbers to show what they prevent."],
+      ["Use HTTP's own cache","ETags answering 304 with an empty body, and private set on anything user-specific."],
+      ["Pick the right Redis structure","Hash, set or sorted set instead of a serialized blob, with a TTL on everything."],
+      ["Measure before optimising","Percentiles, a latency breakdown by component, then a profile."],
+      ["Bound your memory","Every cache has a limit, and you can read a sawtooth."],
+      ["Explain a bad p99","Queueing at high utilisation, and headroom as the fix."]
+    ],
+    sources:`<p>Verified by running, in this container: the stampede comparison on Node 22 (200 concurrent misses produce 200 database calls naively and exactly 1 with single-flight), the ETag exchange against a real HTTP server, where the 304 response carried a zero-byte body, the Redis commands against Redis 7.0.15 with the output shown, and the unbounded-cache growth from 3.5MB to 73.7MB of heap across 200,000 requests.</p>
+      <p>The queueing table is computed from the M/M/1 formula rather than measured, and the topic says so: it is presented as the shape of the curve, with a note that real systems are worse because arrivals are burstier than the model assumes.</p>
+      <p>References, not retrieved while writing: RFC 9111 for HTTP caching and the Redis data types documentation.</p>` }
 ];
 
 const DEPTH = { understand:"Understand", build:"Build" };
