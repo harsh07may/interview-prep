@@ -564,7 +564,186 @@ console.log(cents / 100);                 // 100`} ],
     ],
     sources:`<p>Retrieved while writing: <a href="https://www.rfc-editor.org/rfc/rfc9110.html" target="_blank" rel="noopener">RFC 9110</a>, for the lists of safe and idempotent methods, the status code definitions quoted here, the <code>Allow</code> requirement on 405, and the content negotiation and <code>Vary</code> headers. It also settled two details: POST is neither safe nor idempotent, and 429 is not defined there but in RFC 6585.</p>
       <p>References, not retrieved while writing: the curl manual for the timing variables, RFC 6585 for 429, RFC 3339 for timestamps, the twelve-factor config page, the Node event loop guide, and man7 for signal semantics.</p>
-      <p>Every snippet in this stage was run before publishing, and the output shown in the comments is the real output: the curl timing command, the event loop demonstration, the config validation, and the float money example.</p>` }
+      <p>Every snippet in this stage was run before publishing, and the output shown in the comments is the real output: the curl timing command, the event loop demonstration, the config validation, and the float money example.</p>` },
+
+{ num:2, id:"network", phase:1, name:"Networking and the edge",
+    intro:"What sits between the internet and your process, and what it costs to get through it.",
+    topics:[
+
+      { id:"tls-certs", name:"TLS, certificates and where encryption ends",
+        depth:"understand", core:true,
+        line:"Handshakes, chains and expiry, and the fact that traffic behind the proxy is often plaintext.",
+        what:`<p>TLS gives you three things: nobody can read the traffic, nobody can alter it undetected, and the client can check it is talking to the right server. The third is what certificates are for, and it is the part that breaks.</p>
+              <p>It is not free. A TLS handshake costs one round trip on top of TCP's, which is why connection reuse matters so much. And encryption usually ends at your edge: the hop from proxy to application is frequently plain HTTP, which is fine inside a trusted network and a surprise if you assumed otherwise.</p>`,
+        use:`<p>An integration partner reports that your API fails from their Java service with a certificate error, while it works perfectly in every browser you try. Nothing is wrong with the certificate itself. Your server is sending only the leaf and not the intermediate, and browsers paper over that by fetching or caching intermediates while most other clients do not.</p>`,
+        concepts:[
+          ["Handshake cost","After TCP's round trip, TLS 1.3 adds one more before any data flows. On a 100ms link that is 200ms before your handler has seen anything, paid per new connection."],
+          ["The chain","A client trusts a root, the root signs an intermediate, the intermediate signs your leaf. The server must send the leaf <em>and</em> the intermediates; only the root is expected to be already trusted."],
+          ["SNI","The client names the host it wants during the handshake, so one address can serve many certificates. A client that omits it gets whatever the default certificate is, which is rarely the one you wanted."],
+          ["Expiry","Certificates are short-lived by design now. A renewal that is not automated is an outage with a date on it."],
+          ["Termination","TLS usually ends at the load balancer or proxy. Behind it the request may be plaintext, so anything on that network can read it, and your application sees the proxy's connection rather than the client's."]
+        ],
+        how:`<p>Learn to read a certificate from the command line rather than from a browser padlock, because the browser is the most forgiving client you have. Check the subject, the validity window, and critically the full chain the server actually sends.</p>`,
+        code:[ {label:"Read what the server really sends", lang:"bash", code:`HOST=orders.example.com
+peek() {
+  openssl s_client -connect "$HOST:443" -servername "$HOST" "$@" </dev/null 2>/dev/null
+}
+
+# Subject and validity window
+peek | openssl x509 -noout -subject -dates
+
+# subject=CN = orders.example.com
+# notBefore=Nov 12 07:33:25 2026 GMT
+# notAfter=Feb 10 07:33:25 2027 GMT
+
+# How many certificates does it actually send? One means the chain is
+# incomplete, and non-browser clients will fail where your browser succeeds.
+peek -showcerts | grep -c 'BEGIN CERTIFICATE'`} ],
+        tradeoff:`<p>Terminating TLS at the edge is simpler: one place to install certificates, one place to renew them, and your application never handles keys. Encrypting the internal hop as well costs more setup and more moving parts, and it is what you want when the network between the proxy and the service is not fully trusted, or when a compliance rule says so. Mutual TLS, where both sides present a certificate, goes further and is covered in the service-to-service auth topic.</p>`,
+        pitfall:"Treating \"it works in my browser\" as proof the chain is correct. Browsers cache intermediates from other sites and can fetch missing ones, so they succeed against a misconfigured server that every API client will reject.",
+        exercise:`<p>Run both commands above against a service you own and count the certificates in the chain. Then find out where TLS terminates in your deployment and whether the hop from there to your process is encrypted. Finally, find the renewal mechanism and the expiry date; if you cannot name both in under five minutes, that is the finding.</p>`,
+        refs:[ ["RFC 8446: TLS 1.3","https://www.rfc-editor.org/rfc/rfc8446.html"] ] },
+
+      { id:"connections", name:"Connections: keep-alive, pooling and HTTP/2 multiplexing",
+        depth:"build", core:true,
+        line:"Reusing a connection is the cheapest latency win there is, and the easiest one to throw away by accident.",
+        what:`<p>Opening a connection costs a TCP handshake and, over HTTPS, a TLS handshake too. Reusing one costs nothing. Every HTTP client worth using will reuse connections if you let it, and the usual reason it does not is that the code creates a fresh client per request, which quietly discards the pool each time.</p>
+              <p>HTTP/2 changes the shape of this: many requests share one connection at once, so the old per-host connection limit stops being the constraint.</p>`,
+        use:`<p>A service calls a payment provider on every checkout and the call takes 220ms, of which 180ms is handshake because a new client is constructed inside the request handler. Nothing in the application metrics shows it: the timer around the call reports 220ms and looks like a slow provider. Reusing one client takes the same call to 40ms without touching the provider.</p>`,
+        concepts:[
+          ["Keep-alive","The connection stays open after a response so the next request skips both handshakes. On by default in HTTP/1.1, and easy to lose by constructing a new client."],
+          ["Client pool","A client holds a pool of connections per host. Its size is a concurrency limit: once every connection is busy, further calls queue inside your process."],
+          ["Head-of-line blocking","On HTTP/1.1 a connection handles one request at a time, so a slow response blocks the ones behind it. More connections is the only HTTP/1.1 answer."],
+          ["Multiplexing","HTTP/2 interleaves many requests on one connection, removing that blocking above the transport. A lost TCP packet still stalls all of them, which is the problem HTTP/3 solves by moving to QUIC."],
+          ["Idle timeouts","Both ends decide how long to keep a connection open, and the shorter one wins. A client holding a connection the server has already dropped gets an error on first use, which is why clients retry an idle connection once."]
+        ],
+        how:`<p>Build one client per upstream, at startup, and pass it around. Set its pool size deliberately against what the upstream can take and what your own concurrency is. Then measure: the difference is large enough to see without tooling.</p>`,
+        code:[ {label:"Node: what reuse is worth", lang:"js", code:`const http = require('node:http');
+const server = http.createServer((req, res) => res.end('ok'));
+let opened = 0;
+server.on('connection', () => opened++);
+
+function run(agent, n) { /* n sequential GETs on this agent */ }
+
+server.listen(3999, async () => {
+  const fresh = new http.Agent({ keepAlive: false });
+  const kept  = new http.Agent({ keepAlive: true, maxSockets: 1 });
+  opened = 0; const a = await run(fresh, 200); const ca = opened;
+  opened = 0; const b = await run(kept, 200);  const cb = opened;
+  console.log(\`no keep-alive: \${a}ms over \${ca} connections\`);
+  console.log(\`keep-alive:    \${b}ms over \${cb} connection(s)\`);
+});
+
+// no keep-alive: 152ms over 200 connections
+// keep-alive:    44ms over 1 connection(s)
+// ...and that is over loopback, with no TLS and no network latency.`} ,
+               {label:"C#: the same mistake, the classic version", lang:"cs", code:`// Wrong: a new HttpClient per request. Each one brings its own connection
+// pool, and disposed sockets sit in TIME_WAIT, so a busy service runs out
+// of ports. This is the best-known instance of the bug.
+using (var client = new HttpClient())
+{
+    await client.GetAsync(url);
+}
+
+// Right: one long-lived client, or IHttpClientFactory, resolved once.
+private static readonly HttpClient Client = new(new SocketsHttpHandler
+{
+    PooledConnectionLifetime = TimeSpan.FromMinutes(2),   // picks up DNS changes
+    MaxConnectionsPerServer  = 20,
+});`} ],
+        tradeoff:`<p>A bigger pool raises the concurrency you can push at one upstream and the load that upstream has to absorb. Size it against the slowest realistic response time and the throughput you need, not by picking a round number, and remember that every instance has its own pool: twenty connections per instance across ten instances is two hundred at the database. The long-lived connection has one catch worth knowing: it pins the address it resolved, so a DNS failover will not be noticed until the connection is recycled, which is what a pooled connection lifetime setting is for.</p>`,
+        pitfall:"Constructing the HTTP client inside the request handler. It looks tidy, it passes every test, and it throws away the connection pool on every call so that each request pays for a fresh handshake.",
+        exercise:`<p>Find every place your service constructs an HTTP client and check whether it happens once or per call. Then time one outbound call with a fresh client and with a reused one, against a real upstream. Write the two numbers down: that difference, multiplied by your request rate, is the latency you are currently paying for nothing.</p>`,
+        refs:[ ["RFC 9113: HTTP/2","https://www.rfc-editor.org/rfc/rfc9113.html"] ] },
+
+      { id:"reverse-proxy", name:"Reverse proxies and load balancers at the edge",
+        depth:"build", core:false,
+        line:"Something in front of your service terminates TLS, picks an instance, and applies its own limits.",
+        what:`<p>Almost nothing talks to your process directly. A reverse proxy or load balancer sits in front: it terminates TLS, spreads requests across instances, and enforces its own timeouts and size limits. Those limits are separate from yours, and when they disagree the proxy wins.</p>
+              <p>It also rewrites the picture your application sees. Without configuration, every request appears to come from the proxy's address, over plain HTTP, on whatever port the proxy used.</p>`,
+        use:`<p>Users uploading a 12MB file get a 413 that appears in no application log, because nginx rejected the body at its default 1MB limit before your handler ran. Separately, your rate limiter starts blocking everyone at once: it is keyed on the client address, and every request now carries the proxy's address, so the whole internet looks like one very busy user.</p>`,
+        concepts:[
+          ["Termination","TLS ends at the proxy. Your application sees HTTP, and must be told the original scheme or it will build <code>http://</code> redirect URLs for an HTTPS site."],
+          ["Forwarded headers","<code>X-Forwarded-For</code>, <code>X-Forwarded-Proto</code> and <code>Forwarded</code> carry the original client details. They are plain headers, so a client can send them too: trust them only from proxies you control."],
+          ["Two sets of limits","Body size, header size, and read and write timeouts exist at both layers. The smaller of each pair is the one that applies."],
+          ["Health checks","The balancer decides which instances receive traffic from a periodic probe. What that probe checks is what \"healthy\" means in practice."],
+          ["502, 503, 504","Three different failures that are easy to conflate: a bad or refused response from the backend, nothing available to send to, and a backend that did not answer in time."]
+        ],
+        how:`<p>Configure three things deliberately: the forwarded headers and which sources may set them, the body and timeout limits so they are consistent with your application's, and the health check endpoint. Then learn the three-code vocabulary, because it localises a fault instantly:</p>
+              <ul>
+                <li><strong>502 Bad Gateway</strong> — the proxy reached your service and got something unusable, or the connection was refused. Your process is up but broken, or just died.</li>
+                <li><strong>503 Service Unavailable</strong> — the proxy had nothing healthy to send it to, or shed the request itself. Usually every instance is failing its health check.</li>
+                <li><strong>504 Gateway Timeout</strong> — your service accepted the request and did not finish in time. The work is probably still running.</li>
+              </ul>`,
+        code:[ {label:"nginx: the settings that bite", lang:"nginx", code:`http {
+  # Trust forwarded headers only from the addresses that are really proxies.
+  set_real_ip_from  10.0.0.0/8;
+  real_ip_header    X-Forwarded-For;
+  real_ip_recursive on;
+
+  upstream orders {
+    server 10.0.1.11:8080 max_fails=3 fail_timeout=10s;
+    server 10.0.1.12:8080 max_fails=3 fail_timeout=10s;
+    keepalive 32;                       # reuse upstream connections
+  }
+
+  server {
+    listen 443 ssl;
+    server_name orders.example.com;
+
+    client_max_body_size 20m;           # default is 1m: the silent 413
+
+    location / {
+      proxy_pass http://orders;
+      proxy_http_version 1.1;           # required for upstream keep-alive
+      proxy_set_header Connection "";   # ditto: do not forward "close"
+
+      proxy_set_header Host              $host;
+      proxy_set_header X-Real-IP         $remote_addr;
+      proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+
+      proxy_connect_timeout 2s;         # reaching the backend
+      proxy_send_timeout   10s;
+      proxy_read_timeout   10s;         # waiting for the response -> 504
+    }
+  }
+}`} ],
+        tradeoff:`<p>Put a limit at the edge and you reject bad traffic cheaply, before it costs you a worker; put it in the application and it is version-controlled with the code and testable. The honest answer is both, with the edge limit slightly more generous, so that the application's own error message is what a legitimate client normally sees and the edge is there to stop abuse. Make the edge timeout longer than the application's for the same reason: you want your own error, with your own request id in it, rather than an anonymous 504.</p>`,
+        pitfall:"Trusting X-Forwarded-For unconditionally. It is a header like any other, so a client can set it to whatever it likes, and anything keyed on client address — rate limits, audit logs, geo rules, bans — can then be trivially spoofed.",
+        exercise:`<p>Find your edge configuration and write down four numbers: maximum body size, connect timeout, read timeout, and which addresses are trusted to set forwarded headers. Compare each with the equivalent in your application. Then send a request with a forged <code>X-Forwarded-For</code> header and see whether it reaches your logs as the forged value.</p>`,
+        refs:[ ["RFC 7239: Forwarded HTTP extension","https://www.rfc-editor.org/rfc/rfc7239.html"], ["nginx: proxy module","https://nginx.org/en/docs/http/ngx_http_proxy_module.html"] ] },
+
+      { id:"realtime", name:"Real-time: WebSockets, SSE and long polling",
+        depth:"understand", core:false,
+        line:"Three ways to push to a client, and the stateful cost that comes with the fashionable one.",
+        what:`<p>HTTP is request and response, so sending something to a client that did not just ask needs one of three arrangements: the client polls, the client holds an open response the server writes into (server-sent events), or both sides upgrade to a two-way socket.</p>
+              <p>WebSockets are the most capable and the most expensive. They make your service stateful at the edge: a connection belongs to one instance, so deploys, scaling and routing all become harder.</p>`,
+        use:`<p>An order status page needs to update when the warehouse ships. With polling, a thousand idle users generate a thousand requests a minute for nothing. With SSE, each holds one open response and gets an event the moment it happens, in about thirty lines of code. A WebSocket would also work, and would additionally require you to decide what happens to those connections during a rolling deploy.</p>`,
+        concepts:[
+          ["Polling","The client asks on a timer. Trivial, works everywhere, and wastes requests in proportion to how fresh you want the data."],
+          ["Long polling","The server holds the request open until something happens or a timeout. Near-instant delivery over ordinary HTTP, at the cost of a held connection per client anyway."],
+          ["Server-sent events","A single long-lived HTTP response streaming <code>text/event-stream</code>. One direction only, automatic reconnection with <code>Last-Event-ID</code>, and it is just HTTP, so proxies and auth work normally."],
+          ["WebSockets","An HTTP request upgraded to a two-way socket. Necessary when the client sends a lot too, as in chat, collaborative editing or games."],
+          ["Connection affinity","Any held connection pins a client to one instance. Pushing to a user now means reaching whichever instance holds them, usually via a shared pub/sub channel."]
+        ],
+        how:`<p>Choose by direction and volume. If the server does all the talking, use SSE. If the client also sends frequently, use WebSockets. If updates are rare and a few seconds of staleness is fine, poll and spend the effort elsewhere.</p>
+              <p>Whichever you pick, three things need deciding before it goes to production: how the connection is authenticated (the upgrade request carries cookies but not custom headers from a browser, so a short-lived ticket in the query string is common), how liveness is detected (heartbeats, because a dropped connection often looks open to both sides), and how a message reaches the right instance, which is a pub/sub channel every instance subscribes to.</p>`,
+        tradeoff:`<p>Reach for SSE first. It is ordinary HTTP, so your proxy, your authentication and your observability all keep working, and the browser reconnects for you. Its limits are real but narrow: one direction, and on HTTP/1.1 it occupies one of the browser's handful of connections per host, which HTTP/2 fixes. Move to WebSockets when the client genuinely needs to send a stream of its own, and accept that you have taken on stateful edge connections. Long polling is now mostly a fallback for environments where neither is allowed through.</p>`,
+        pitfall:"Choosing WebSockets for a feature that only pushes one way, then discovering during the first rolling deploy that every client disconnects at once and reconnects in a thundering herd, against an instance count that has not finished scaling.",
+        exercise:`<p>Build the order status update twice: once with a three-second poll, once with SSE. Measure the requests per minute each generates for ten idle clients, and the delay between the server-side change and the client seeing it. Then run two instances and make the SSE version deliver an event raised on the instance the client is <em>not</em> connected to; that last part is the real lesson.</p>`,
+        refs:[ ["MDN: server-sent events","https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events"], ["RFC 6455: the WebSocket protocol","https://www.rfc-editor.org/rfc/rfc6455.html"] ] }
+
+    ],
+    after:[
+      ["Diagnose a certificate problem","You can read a chain from the command line and explain why a browser succeeds where a client fails."],
+      ["Stop paying for handshakes","You know where your service creates HTTP clients and what reuse is worth in milliseconds."],
+      ["Read 502, 503 and 504","Each one points you at a different layer before you open any logs."],
+      ["Configure an edge safely","Forwarded headers trusted from known sources only, with body and timeout limits that agree with the application's."],
+      ["Choose a push mechanism","You can say why SSE beats WebSockets for one-way updates, and what affinity costs you."]
+    ],
+    sources:`<p>References, not retrieved while writing: RFC 8446 for TLS 1.3, RFC 9113 for HTTP/2, RFC 7239 for the <code>Forwarded</code> header, RFC 6455 for WebSockets, the nginx proxy module documentation, and MDN on server-sent events.</p>
+      <p>Snippets: the keep-alive comparison was run on Node 22 and the numbers in its comments are the real output, measured over loopback with no TLS, which makes it a conservative figure rather than a flattering one. The <code>openssl</code> pipeline was run end to end against a local TLS server, because this container blocks outbound TLS; the command itself is unmodified. The nginx configuration was not validated with <code>nginx -t</code>, as nginx is not installed here; treat it as a worked example to adapt rather than a file to paste.</p>` }
 ];
 
 const DEPTH = { understand:"Understand", build:"Build" };
