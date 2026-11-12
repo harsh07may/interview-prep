@@ -1537,7 +1537,157 @@ end`} ],
     ],
     sources:`<p>Verified while writing, against a live PostgreSQL 16.15 in this container, on a 50,000-row orders table: the window function result, the two index-order plans and their buffer counts (62 pages versus 25, with the plan shape identical, which is why this topic argues against reading the plan shape alone), the sequential scan with 49,906 rows removed by filter, <code>default_transaction_isolation</code> reading <code>read committed</code>, the non-repeatable read and its absence at repeatable read, the lost update ending at 120 and the atomic version ending at 130, the optimistic-locking update affecting zero rows, a genuine deadlock with the error text quoted verbatim, the failure of <code>ADD COLUMN ... NOT NULL</code> on a populated table, the 2.353ms metadata-only add with a default, and the <code>ShareLock</code> taken by a plain <code>CREATE INDEX</code>.</p>
       <p>One planned claim did not survive testing and was rewritten: a wrongly ordered index does not stop Postgres using the index. It still performs an index scan and filters within it, so the difference shows up in pages read rather than in the plan shape. The topic says that instead.</p>
-      <p>References, not retrieved while writing: the PostgreSQL documentation pages linked from each topic.</p>` }
+      <p>References, not retrieved while writing: the PostgreSQL documentation pages linked from each topic.</p>` },
+
+{ num:5, id:"dataops", phase:2, name:"The data layer in production",
+    intro:"Choosing a store, moving data in bulk, keeping history, and reading from replicas.",
+    topics:[
+
+      { id:"store-choice", name:"Choosing a data store",
+        depth:"understand", core:true,
+        line:"Relational until something forces otherwise, and the burden of proof is on the alternative.",
+        what:`<p>A relational database with transactions, constraints and a query planner handles the overwhelming majority of backend workloads, including many people assume it cannot. The alternatives are not more modern; they are specialised, and each trades away something the relational database gave you for free.</p>
+              <p>So the useful question is not "which database is best" but "what specifically does this workload need that Postgres cannot do", and the answer is usually nothing.</p>`,
+        use:`<p>A team picks a document store for a product catalogue because the schema will change. Two years later they need "every order for products in category X, totalled by month". That is a join and an aggregate, which the document store does not do, so it is now application code that fetches everything and sums it in memory, and it is the slowest endpoint they have.</p>`,
+        concepts:[
+          ["Relational","Transactions across rows and tables, constraints, joins, and ad hoc queries you did not plan for. The default, and the only one that protects you from your own future requirements."],
+          ["Key-value","A hash table over the network: constant-time get and set by key, nothing else. Right for sessions, caches, counters and rate limits."],
+          ["Document","Stores nested documents and queries within one. Right when the document is genuinely the unit of access and you never need to relate documents to each other."],
+          ["Search","Inverted indexes, relevance ranking, fuzzy matching and faceting. Right for text search, and it is a secondary index over your real data, never the source of truth."],
+          ["Time series","Append-mostly data keyed by time, with compression and downsampling. Right for metrics and telemetry, where retention and rollups matter more than updates."]
+        ],
+        how:`<p>Start relational. Add a second store only when you can name the specific access pattern it serves and the operational cost you are accepting: another thing to back up, monitor, upgrade, secure and keep in step. Note that modern Postgres covers several of these adequately — JSONB for documents, full-text search for modest search needs, <code>LISTEN</code>/<code>NOTIFY</code> for light messaging — and "adequately in one system" beats "well in two" until it genuinely does not.</p>
+              <p>When you do add one, be explicit about which store owns each fact. Two systems that both think they own the customer record is a reconciliation problem you will be living with for years.</p>`,
+        tradeoff:`<p>Graph databases and wide-column stores deserve one honest line each rather than a tour. A graph database earns its place when traversals of unknown depth are the main query — recommendation networks, fraud rings, permission hierarchies — and in a relational schema a recursive CTE covers a surprising amount of that. A wide-column store such as Cassandra earns its place at write volumes and cluster sizes where a single primary cannot keep up and you can accept designing every table around one query. If you are not sure you are in either situation, you are not.</p>`,
+        pitfall:"Choosing a store for the write path and discovering the read requirements later. Queries you have not thought of yet are the relational database's strongest advantage, and the one that never appears in a benchmark.",
+        exercise:`<p>Take a service that uses a non-relational store and write the three most important queries against it as SQL. If they are all straightforward, you have found an accidental choice. Then do the reverse: find the heaviest query in a relational service and ask what store would serve it better, and what you would give up by moving it.</p>`,
+        refs:[] },
+
+      { id:"bulk-writes", name:"Batching, bulk writes and server-side cursors",
+        depth:"build", core:false,
+        line:"Row-at-a-time is the slow default; so is loading a large result set into memory.",
+        what:`<p>Two symmetrical mistakes. Writing a large amount of data one row at a time pays the per-statement cost thousands of times. Reading a large result set pulls every row into memory before your code sees the first one. Both work fine at test scale and fall over on real volumes.</p>`,
+        use:`<p>A nightly import of 200,000 rows takes 40 minutes and occasionally runs into the morning. It inserts one row per statement inside one transaction. Batched into multi-row inserts of a few thousand, in separate transactions, it finishes in under a minute and no longer holds a single transaction open for the whole run.</p>`,
+        concepts:[
+          ["Per-statement cost","Parsing, planning and a network round trip, paid per statement. At 10,000 statements it dominates everything else."],
+          ["Multi-row insert","One statement, many rows. The simplest large win, and it works in every database."],
+          ["COPY","Postgres's bulk loader: the fastest path in, bypassing most per-row overhead. The right tool for an import, not for ordinary writes."],
+          ["Chunked updates","A single UPDATE over millions of rows holds one long transaction and blocks writers. A loop over bounded batches, each its own transaction, does not."],
+          ["Server-side cursor","The database holds the result and you fetch it in pieces, so memory stays constant regardless of result size."]
+        ],
+        how:`<p>For writes, batch into chunks of a few thousand and commit per chunk, so a failure costs one chunk rather than the run. For a true bulk load, use <code>COPY</code>. For reads, use a server-side cursor or keyset pagination and stream, never <code>fetchall</code> on something unbounded.</p>`,
+        code:[ {label:"Postgres: the cost of row-at-a-time", lang:"sql", code:`-- 10,000 single-row inserts, in a server-side loop
+do $$ begin for i in 1..10000 loop
+  insert into bulk values (i, 'row '||i, i*7); end loop; end $$;
+-- Time: 37.917 ms
+
+-- The same 10,000 rows in one statement
+insert into bulk select g, 'row '||g, g*7 from generate_series(1,10000) g;
+-- Time: 8.486 ms
+
+-- That is 4.5x, and it understates the real gap badly: the loop above
+-- runs inside the server with no network. From an application, each of
+-- those 10,000 inserts is also a round trip.`},
+               {label:"Postgres: constant memory over a large result", lang:"sql", code:`begin;
+declare c cursor for select id, total_cents from orders order by id;
+
+fetch 3 from c;
+--  id | total_cents
+-- ----+-------------
+--   1 |      345733
+--   2 |      464072
+--   3 |      400013
+
+fetch 3 from c;          -- continues where it left off
+close c;
+commit;
+
+-- The cursor lives inside a transaction, so keep the work per fetch
+-- small: this transaction is open for the whole export.`} ],
+        tradeoff:`<p>Bigger batches amortise overhead better and make each failure more expensive, hold locks longer and use more memory. A few thousand rows is the usual sweet spot, and the right way to pick is to measure three sizes rather than reason about it. The separate question is transaction scope: one transaction for the whole import gives you all-or-nothing at the cost of a very long transaction; one per batch means a partial import you must be able to resume, which is usually the better trade for a job that runs regularly.</p>`,
+        pitfall:"Wrapping a million-row update in a single transaction so it is atomic. It blocks every writer behind it for the duration, bloats the table with dead rows, and if it times out near the end it rolls back entirely and you start from zero.",
+        exercise:`<p>Write the same 50,000-row import three ways: one row per statement, batches of 5,000, and <code>COPY</code>. Time all three from an application, not from inside the database, so the round trips count. Then write an export of the same table that streams with a cursor, and watch your process's memory while it runs.</p>`,
+        refs:[ ["PostgreSQL: COPY","https://www.postgresql.org/docs/current/sql-copy.html"] ] },
+
+      { id:"soft-deletes-audit", name:"Soft deletes, audit trails and time-based data",
+        depth:"build", core:false,
+        line:"Keeping deleted rows is easy; keeping them from breaking everything else is the work.",
+        what:`<p>Businesses rarely want data destroyed. The usual answer is a <code>deleted_at</code> column, which is simple and quietly breaks three things: unique constraints, every query that forgets the filter, and foreign keys that still point at the dead row.</p>
+              <p>Separately, there is auditing — knowing who changed what and when — which a soft delete does not give you and which is a different mechanism.</p>`,
+        use:`<p>A user deletes their account and signs up again with the same email. The insert fails with a unique violation, because the soft-deleted row still holds the address. The quick fix of dropping the unique constraint is much worse: now nothing stops two live accounts sharing an email.</p>`,
+        concepts:[
+          ["Partial unique index","Uniqueness over live rows only: <code>unique (email) where deleted_at is null</code>. Keeps the guarantee and allows the dead row to remain."],
+          ["The forgotten filter","Every query must exclude deleted rows. One that does not is a data leak, and the bug is invisible in review because the query reads correctly."],
+          ["Audit table","Append-only, one row per change, with who, when, what changed and the old and new values. Separate from the entity table, never updated."],
+          ["Triggers versus application","A database trigger cannot be bypassed and records changes from any source, including a manual fix. Application-level auditing knows the user and the intent."],
+          ["Validity periods","Some facts are true for a range, such as a price or an address. A row with <code>valid_from</code> and <code>valid_to</code> models that properly; overwriting loses history."]
+        ],
+        how:`<p>Use a partial unique index for every uniqueness rule on a soft-deletable table. Then stop relying on memory for the filter: expose the table through a view that already excludes deleted rows, and have ordinary code read the view, so forgetting the filter is impossible rather than merely discouraged.</p>
+              <p>For auditing, prefer a trigger writing to an append-only table, because it also captures the changes made outside the application, which are exactly the ones you most want a record of.</p>`,
+        code:[ {label:"Postgres: uniqueness that survives soft delete", lang:"sql", code:`-- A plain unique constraint rejects the new signup.
+insert into users (email, deleted_at) values ('a@x.com', now());
+insert into users (email)              values ('a@x.com');
+-- ERROR:  duplicate key value violates unique constraint "users_email_key"
+
+-- Partial unique index: only live rows have to be unique.
+alter table users drop constraint users_email_key;
+create unique index users_email_live on users (email)
+  where deleted_at is null;
+
+insert into users (email) values ('a@x.com');     -- accepted
+--  id |  email  | soft_deleted
+-- ----+---------+--------------
+--   1 | a@x.com | t
+--   3 | a@x.com | f
+
+-- And a second LIVE duplicate is still rejected, which is the point.
+insert into users (email) values ('a@x.com');
+-- ERROR:  duplicate key value violates unique constraint "users_email_live"`} ],
+        tradeoff:`<p>Soft delete keeps history and makes every query and constraint more complicated, forever. Hard delete keeps the schema clean and is irreversible. A third option is often better than either: hard delete the row and write it to an archive or audit table in the same transaction. The live table stays simple, nothing is lost, and the complexity sits in one place instead of in every query. Reach for soft delete when users need to undo, and for archiving when the requirement is really "we must be able to look it up later".</p>`,
+        pitfall:"Adding deleted_at to an existing table and fixing the queries you can find. The ones you miss keep returning deleted rows, and because they still return plausible data nobody notices until a customer sees a record they deleted last year.",
+        exercise:`<p>Take a soft-deletable table and find every query that reads it. Count how many filter on <code>deleted_at</code>. Then create a view that excludes deleted rows, point the application at the view, and check that every uniqueness rule on the table has a partial index behind it rather than a plain constraint.</p>`,
+        refs:[ ["PostgreSQL: partial indexes","https://www.postgresql.org/docs/current/indexes-partial.html"] ] },
+
+      { id:"replicas-lag", name:"Read replicas and replication lag",
+        depth:"build", core:false,
+        line:"A replica is a few milliseconds in the past, which is long enough to show a user their own write missing.",
+        what:`<p>A read replica streams changes from the primary and serves reads, which takes load off the primary and gives you a failover candidate. It is also always slightly behind — usually milliseconds, occasionally minutes under load or during a long transaction — and anything that reads from it is reading the past.</p>`,
+        use:`<p>A user updates their profile and is redirected to the profile page. The write went to the primary, the read went to a replica that is 30ms behind, and the page shows the old name. The user changes it again. Now you have a support ticket that nobody can reproduce, because by the time anyone looks, the replica has caught up.</p>`,
+        concepts:[
+          ["Asynchronous replication","The primary commits without waiting for replicas. Fast, and it means a committed write is not yet visible everywhere, and could be lost in a failover."],
+          ["Synchronous replication","The primary waits for at least one replica to confirm. No data loss on failover, and every write now pays a network round trip."],
+          ["Lag","Measured in bytes behind or seconds behind. Normally tiny, and it grows under write bursts, during vacuum, and when a long query on the replica blocks apply."],
+          ["Read-your-writes","The guarantee that a user sees their own write immediately. The anomaly replicas introduce, and the one users notice."],
+          ["Routing","Which queries go where. Usually a decision per query or per request, not a global setting."]
+        ],
+        how:`<p>Route deliberately rather than globally. The workable default: everything in a request that has performed a write goes to the primary for the rest of that request, and read-only paths that tolerate staleness go to replicas. Reporting, exports, search indexing and analytics are the natural replica workloads; the checkout flow is not.</p>
+              <p>Then monitor lag as a first-class metric and alert on it, because the failure mode is silent. If a page genuinely must be fresh, read from the primary and say so in the code, rather than hoping.</p>`,
+        code:[ {label:"Postgres: how far behind is it?", lang:"sql", code:`-- On the primary: per-replica lag, in bytes and in stages.
+select client_addr, state,
+       pg_wal_lsn_diff(sent_lsn,   write_lsn)  as to_write,
+       pg_wal_lsn_diff(sent_lsn,   flush_lsn)  as to_flush,
+       pg_wal_lsn_diff(sent_lsn,   replay_lsn) as to_replay
+from pg_stat_replication;
+
+-- On the replica: how old is the data it is serving?
+select now() - pg_last_xact_replay_timestamp() as behind;
+
+-- Alert on "behind", not on an average: lag is bursty, and the
+-- ninety-ninth percentile is what a user actually experiences.`} ],
+        tradeoff:`<p>Replicas are the cheapest way to add read capacity and they buy it with staleness, which you then have to reason about at every read. They are not a fix for a slow primary: if a query is slow because it is badly indexed, it is equally slow on a replica, and you have added an operational component rather than solved the problem. Index first, measure, and add replicas when the primary is genuinely out of read capacity or when you want an isolated place for heavy analytical queries.</p>`,
+        pitfall:"Sending all reads to replicas by default because it balances load. Every read-after-write in the product becomes intermittently wrong, in a way that depends on timing and so cannot be reproduced on request.",
+        exercise:`<p>Set up a primary and one replica locally. Write a loop that updates a row on the primary and immediately reads it from the replica, and count how often it reads the old value. Then add a deliberate load to the primary and watch the count rise. That number is your read-your-writes bug rate, and it is the argument for routing by request rather than globally.</p>`,
+        refs:[ ["PostgreSQL: monitoring replication","https://www.postgresql.org/docs/current/monitoring-stats.html"] ] }
+
+    ],
+    after:[
+      ["Defend a store choice","You can name the access pattern that justifies anything other than a relational database."],
+      ["Move data in bulk","Batched writes with a chosen chunk size, COPY for imports, and cursors for exports."],
+      ["Keep history safely","Partial unique indexes, a view that cannot forget the filter, and an append-only audit trail."],
+      ["Use replicas without lying to users","Routing per request, lag monitored as a percentile, and writes read back from the primary."]
+    ],
+    sources:`<p>Verified while writing, against the live PostgreSQL 16.15 in this container: the insert timings (37.917ms for 10,000 single-row inserts in a server-side loop against 8.486ms for one multi-row statement, which the topic is careful to label as an understatement because the loop pays no network cost), the soft-delete unique violation and its exact error text, the partial unique index accepting the new live row while still rejecting a second live duplicate, and the server-side cursor fetching in pieces.</p>
+      <p>References, not retrieved while writing: the PostgreSQL documentation pages linked from each topic. The replication queries are standard catalogue views and were not run here, because this container has a single instance and no replica.</p>` }
 ];
 
 const DEPTH = { understand:"Understand", build:"Build" };
