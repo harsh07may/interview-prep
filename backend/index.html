@@ -2883,7 +2883,336 @@ def handle(request):
     ],
     sources:`<p>Verified by running, in this container: the three async timings on Node 22 (1005ms serialised, 100ms concurrent, 1005ms for 50 items at a limit of 5), and the PostgreSQL advisory lock sequence, where the second instance received <code>f</code> and acquired the lock only after the first released it.</p>
       <p>The Redlock dispute is described as contested rather than settled, because it is: the topic's point is that a lock whose safety is argued about is not a thing to rely on for correctness, whichever side is right.</p>
-      <p>References, not retrieved while writing: the PostgreSQL advisory lock documentation and the Redis distributed locks page.</p>` }
+      <p>References, not retrieved while writing: the PostgreSQL advisory lock documentation and the Redis distributed locks page.</p>` },
+
+{ num:10, id:"messaging", phase:4, name:"Messaging and event-driven architecture",
+    intro:"Decoupling work in time, and the guarantees you actually get when you do.",
+    topics:[
+
+      { id:"broker-choice", name:"Queue, pub/sub and log, and what delivery really guarantees",
+        depth:"understand", core:true,
+        line:"Three different shapes, and exactly-once delivery is not one of the options.",
+        what:`<p>Messaging systems get lumped together, but there are three distinct shapes: a work queue where each message goes to one consumer, publish-subscribe where each message goes to every subscriber, and a log where messages are retained and consumers track their own position.</p>
+              <p>And there is one guarantee everybody wants and nobody provides. Exactly-once <em>delivery</em> is not available over an unreliable network. What you can have is at-least-once delivery with idempotent processing, which produces an exactly-once <em>effect</em>.</p>`,
+        use:`<p>An order is paid. One system must charge the warehouse, exactly one worker should do it, and that is a work queue. Four unrelated systems — email, analytics, loyalty points, fraud scoring — all want to know, and that is publish-subscribe. A new analytics service launched today needs the last month of events to build its view, and that is a log, because only a log still has them.</p>`,
+        concepts:[
+          ["Work queue","One message, one consumer, competing workers. Scaling out means adding workers. Classic brokers such as RabbitMQ and SQS."],
+          ["Publish-subscribe","One message, every subscriber gets a copy. Adding a consumer does not change the producer, which is the point."],
+          ["Log","An ordered, retained sequence with each consumer tracking its own offset. Replayable, which queues are not. Kafka is the common example."],
+          ["At-most-once","Fire and forget. Fast, and messages are lost on failure. Acceptable for metrics, never for money."],
+          ["At-least-once","Retried until acknowledged, so duplicates happen. The realistic default, and the reason the next topic exists."]
+        ],
+        how:`<p>Pick by the question "who needs this, and for how long". One consumer and no history: a queue. Several consumers: pub/sub. Consumers that may arrive later and need the history, or that need to rebuild state by replaying: a log.</p>
+              <p>Then design for at-least-once from the start. Every consumer must tolerate seeing a message twice, because it will, and bolting that on later means auditing every handler you have already written.</p>`,
+        code:[ {label:"What each shape gives you", lang:"text", code:`                 work queue      pub/sub        log
+one message to   one consumer    all subscribers  all consumer groups
+retained after   acknowledgement  delivery        a retention window
+late subscriber  gets nothing     gets nothing    can replay from the start
+ordering         usually none     none            per partition
+scaling          add workers      add subscribers  add partitions
+typical          RabbitMQ, SQS    SNS, Pub/Sub     Kafka, Redpanda
+
+"Exactly once" as advertised by brokers means exactly-once processing
+WITHIN that system's own boundary: an offset commit and a state update
+made atomic by the broker. The moment your consumer charges a card or
+calls an external API, you are back to at-least-once, and idempotency
+is the only thing standing between you and a duplicate charge.`} ],
+        tradeoff:`<p>A log is strictly more capable and strictly more work: retention to size, partitions to choose, offsets to manage, and consumer groups to rebalance. A queue deletes the message when it is done and there is nothing to reason about afterwards. Take the queue unless you need replay or several independent consumers; those two needs are what a log is for, and if you have neither you are paying for a distributed log to do a to-do list's job.</p>`,
+        pitfall:"Believing a broker's exactly-once marketing covers your side effects. It covers the broker's own bookkeeping. Your handler charging a card twice is outside that boundary, and no broker setting prevents it.",
+        exercise:`<p>List the asynchronous messages in a system you know and classify each as queue, pub/sub or log. Then for each, answer one question: what happens if it is delivered twice? Anything without a confident answer is the next topic's exercise.</p>`,
+        refs:[] },
+
+      { id:"consumer-idempotency", name:"At-least-once delivery and consumer idempotency",
+        depth:"build", core:true,
+        line:"Your handler will run twice on the same message; make the second run harmless.",
+        what:`<p>At-least-once means duplicates, from a retry after a slow acknowledgement, a consumer restart before committing, or a rebalance. It is not an edge case: it happens routinely, and it is the single most common source of data corruption in event-driven systems.</p>
+              <p>The fix is not to stop the duplicates, which you cannot. It is to make processing the same message twice produce the same result as processing it once.</p>`,
+        use:`<p>A payment consumer charges a card, then acknowledges. The acknowledgement is lost because the broker connection drops in between. The message is redelivered, the consumer charges again, and the customer is debited twice for one order. Every component behaved exactly as designed.</p>`,
+        concepts:[
+          ["Natural idempotency","Some operations repeat harmlessly: setting a status to <code>shipped</code>, upserting a row by key. Prefer these when you can design for them."],
+          ["A processed table","Record each message id with a unique constraint. The insert is the claim; a conflict means it was already handled."],
+          ["Atomicity with the effect","The dedup record and the side effect must commit together. Two separate steps can fail between, giving you a duplicate or a lost message."],
+          ["External side effects","Calling someone else's API cannot be in your transaction. Use their idempotency key, which is what it exists for."],
+          ["Retention","The dedup table grows forever unless pruned. Keep it longer than the broker's maximum redelivery window and delete the rest."]
+        ],
+        how:`<p>Give every message a stable identifier the producer sets, not one the broker generates, so a republished message is recognisably the same event. In the consumer, insert that id and the side effect in one transaction. If the insert conflicts, you have already processed it: acknowledge and do nothing.</p>`,
+        code:[ {label:"Postgres: the claim and the effect, together", lang:"sql", code:`create table processed (
+  message_id text primary key,
+  at         timestamptz not null default now()
+);
+
+-- In one transaction with the side effect:
+begin;
+  insert into processed (message_id) values ($1)
+  on conflict do nothing;
+  -- INSERT 0 1  -> we claimed it, do the work
+  -- INSERT 0 0  -> already handled, skip and acknowledge
+
+  update orders set status = 'paid' where id = $2;
+commit;
+
+-- Prune on a schedule, past the broker's redelivery window:
+delete from processed where at < now() - interval '7 days';`},
+               {label:"The three cases, in order", code:`def handle(message):
+    with transaction():
+        claimed = insert_processed(message.id)      # unique constraint
+        if not claimed:
+            return ack()                            # duplicate, nothing to do
+        apply_effect(message)                       # same transaction
+    ack()
+
+# External side effects cannot join your transaction. Pass the message
+# id through as the provider's idempotency key, so their side dedupes:
+    gateway.charge(amount, idempotency_key = message.id)
+
+# And prefer naturally idempotent effects where the design allows:
+#   set status = 'shipped'        safe to repeat
+#   status = status + 1           not safe
+#   insert ... on conflict do nothing     safe to repeat`} ],
+        tradeoff:`<p>A dedup table is explicit, auditable and costs a write plus a row per message. Natural idempotency is free and constrains how you model the operation: "set the status" repeats safely while "increment the count" does not, so you may have to store the resulting value rather than the delta. Where you can design for natural idempotency, do, because it needs no table, no pruning and no transaction coordination. Where you cannot, the table is the reliable fallback.</p>`,
+        pitfall:"Recording the message as processed after doing the work, in a separate step. A crash in the gap means the work happened and the record did not, so the redelivery does it all again, which is precisely the case you added the table to prevent.",
+        exercise:`<p>Take one consumer and deliver the same message to it twice, deliberately. Check what happens to the data. Then add the processed table in the same transaction as the effect, repeat, and confirm the second delivery changes nothing. Finally, kill the consumer between the effect and the acknowledgement and confirm the redelivery is still safe.</p>`,
+        refs:[] },
+
+      { id:"ordering-partitions", name:"Ordering, partitioning and consumer groups",
+        depth:"build", core:false,
+        line:"Order is only guaranteed within a partition, so the partition key decides what stays ordered.",
+        what:`<p>Parallelism and ordering are in direct conflict. A single consumer preserves order and cannot scale; many consumers scale and process in whatever order they happen to finish. The compromise every log system makes is to order within a partition and let partitions run independently.</p>
+              <p>That makes the partition key the most consequential design decision: it is what you are promising to keep in order.</p>`,
+        use:`<p>Order events are partitioned by event type, so <code>order.created</code> and <code>order.cancelled</code> land in different partitions. A cancellation is processed before the creation it refers to, and the consumer fails on a row that does not exist yet. Partitioning by order id instead would have kept one order's events in sequence, which is the only ordering anyone needed.</p>`,
+        concepts:[
+          ["Partition","An independent ordered sequence. Order holds inside one and says nothing across them."],
+          ["Partition key","Hashed to pick the partition. Same key, same partition, so events about one entity stay in order."],
+          ["Consumer group","Consumers sharing the work: each partition is assigned to exactly one member, so the maximum useful parallelism is the partition count."],
+          ["Rebalancing","When a consumer joins or leaves, partitions are reassigned. In-flight work may be redelivered elsewhere, which is another source of duplicates."],
+          ["Hot partition","One key far busier than the rest. Its partition saturates while the others idle, and adding consumers does not help."]
+        ],
+        how:`<p>Choose the key as the thing whose events must be ordered: usually the entity id. Avoid keys with very few distinct values, which concentrate traffic, and keys with pathological skew, where one tenant dwarfs the rest.</p>
+              <p>Set the partition count above the consumers you expect to need, because increasing it later changes the hashing and so breaks the ordering guarantee for existing keys. Then make consumers tolerant of out-of-order arrival anyway: carry a version or a timestamp and ignore anything older than what you have already applied.</p>`,
+        code:[ {label:"What the key promises", lang:"text", code:`key = event type            key = order_id
+  partition 0: created        partition 0: order 7 created, paid, shipped
+  partition 1: paid           partition 1: order 8 created, cancelled
+  partition 2: cancelled      partition 2: order 9 created, paid
+
+left:  nothing about one order is ordered. "cancelled" can arrive
+       before "created" and the consumer fails on a missing row.
+right: each order's events are strictly ordered. Different orders
+       interleave freely, which nobody cares about.
+
+Consumers in a group, with 3 partitions:
+  1 consumer  -> handles all 3
+  3 consumers -> one each
+  5 consumers -> three work, two sit idle
+
+The partition count is the ceiling on parallelism, and raising it
+later rehashes keys, so existing entities can move partitions and
+lose their ordering relative to their own history.`} ],
+        tradeoff:`<p>A coarse key, such as the tenant, keeps more things ordered and limits parallelism to the number of tenants, with large tenants creating hot partitions. A fine key, such as the order id, spreads evenly and orders less. Pick the coarsest key whose ordering you actually need, which is usually the entity, not the tenant. And treat the ordering guarantee as a bonus rather than a foundation: a consumer that also tolerates out-of-order messages keeps working through a rebalance, a replay or a partition change.</p>`,
+        pitfall:"Using a random or round-robin partition key for throughput, then relying on ordering somewhere downstream. The system works under light load, because messages happen to arrive in order, and fails under the load that made you want the throughput.",
+        exercise:`<p>Take an event stream you know and write down the partition key and what ordering it guarantees. Then find a consumer that assumes a different ordering from the one the key provides. Add a version check to that consumer so an out-of-order message is ignored rather than applied, and test it by replaying two events in the wrong order.</p>`,
+        refs:[] },
+
+      { id:"dlq-retries", name:"Retries, dead-letter queues and poison messages",
+        depth:"build", core:true,
+        line:"A dead-letter queue nobody watches is a silent data-loss hole with a reassuring name.",
+        what:`<p>Some messages fail. A few fail because of a transient problem and will succeed on retry; others fail because they are malformed or hit a bug, and will fail forever. Treating both the same is how a single bad message blocks a partition, or how a transient outage discards a day of work.</p>
+              <p>The dead-letter queue is where the permanent failures go. Its value depends entirely on somebody looking at it.</p>`,
+        use:`<p>A consumer hits a message with a null field it does not handle. It throws, the broker redelivers, it throws again, forever. Because the partition is ordered, every message behind it waits. The queue depth climbs for six hours before anyone connects the alert to the one message at the head.</p>`,
+        concepts:[
+          ["Transient versus permanent","A timeout is worth retrying; a validation failure is not. Retrying a permanent failure is pure cost, and retrying forever is an outage."],
+          ["Bounded retries with backoff","A small number of attempts with increasing delay and jitter. Immediate retries hammer a dependency that is already struggling."],
+          ["Dead-letter queue","Where a message goes after its last attempt, with the error and the attempt history attached. A holding area for human judgement, not a bin."],
+          ["Poison message","One message that fails consistently and blocks everything behind it in an ordered partition. The reason a retry limit is mandatory."],
+          ["Replay","Fixing the bug and reprocessing the dead letters. This only works if the handler is idempotent, which is the previous topic."]
+        ],
+        how:`<p>Separate the two failure kinds in the handler. Classify the exception: a timeout or a 503 from a dependency is retryable, a parse failure or a constraint violation is not. Send permanent failures straight to the dead-letter queue instead of burning the retry budget on them.</p>
+              <p>Then alert on dead-letter depth, not just on a non-zero count, and include the original message, the error and the attempt count so the queue is diagnosable without a log search.</p>`,
+        code:[ {label:"Classify, then retry or park", code:`MAX_ATTEMPTS = 5
+
+def consume(message):
+    try:
+        handle(message)
+        ack()
+    except Retryable as e:                       # timeout, 503, deadlock
+        if message.attempts >= MAX_ATTEMPTS:
+            dead_letter(message, reason=str(e), attempts=message.attempts)
+            ack()                                # stop blocking the partition
+        else:
+            nack(delay=backoff(message.attempts))
+    except Exception as e:                       # malformed, bug, constraint
+        dead_letter(message, reason=str(e))      # no point retrying
+        ack()
+
+def backoff(attempt):
+    base = min(2 ** attempt, 60)                 # 2, 4, 8, 16, 32, 60
+    return base * (0.5 + random())               # jitter: do not synchronise
+
+# Alert on the DLQ, or it is a hole you cannot see into:
+#   depth > 0 for more than 15 minutes    -> page someone
+#   depth growing                          -> page immediately`} ],
+        tradeoff:`<p>Retrying in the consumer is simple and occupies the consumer while it waits, reducing throughput exactly when a dependency is slow. Scheduling a delayed redelivery through the broker frees the consumer and needs broker support plus a way to carry the attempt count. For short backoffs, in-consumer is fine. For anything beyond a few seconds, push it back to the broker; a worker sleeping for thirty seconds is a worker not doing the other work in the queue.</p>`,
+        pitfall:"Setting up a dead-letter queue and no alert on it. Messages land there silently, the system looks healthy, and the data loss is discovered weeks later when someone asks why a customer never got their refund.",
+        exercise:`<p>Put a deliberately malformed message into a queue you own and watch what happens. Note how long it takes to stop retrying, whether it blocks anything behind it, and whether anything tells you. Then add classification, a retry limit and a dead-letter alert, and repeat.</p>`,
+        refs:[] },
+
+      { id:"outbox", name:"The outbox pattern and dual writes",
+        depth:"build", core:false,
+        line:"You cannot commit a database transaction and publish a message atomically, so do not try.",
+        what:`<p>An order is saved and an event is published. Two systems, two writes, no shared transaction. Whichever order you do them in, a failure between the two leaves them inconsistent: an order with no event, or an event for an order that was rolled back.</p>
+              <p>The outbox removes the second system from the critical path. The event is written to a table in the same transaction as the data, and a separate relay publishes it afterwards.</p>`,
+        use:`<p>Checkout writes the order, then publishes <code>order.paid</code>. The broker is briefly unreachable. The order exists, the warehouse never hears about it, and nothing in the system knows. With an outbox the event is already committed next to the order, and the relay delivers it whenever the broker returns.</p>`,
+        concepts:[
+          ["Dual write","Two writes to two systems that must both happen. There is no way to make them atomic without a protocol nobody wants to run."],
+          ["Outbox table","Events written in the business transaction. If the transaction rolls back, so does the event, which is exactly right."],
+          ["The relay","A process reading unpublished rows and sending them. It can crash and restart; the rows are still there."],
+          ["At-least-once, again","The relay may publish and crash before marking the row. The event goes out twice, which is fine because consumers are idempotent."],
+          ["Change data capture","The alternative: read the database's replication log and publish from that. No outbox table, no relay to write, and a heavier piece of infrastructure."]
+        ],
+        how:`<p>Write the event row inside the business transaction. Have the relay claim a batch with <code>FOR UPDATE SKIP LOCKED</code>, so several relay instances can run without taking the same rows, publish them, and mark them published. Order by id so events leave in the order they were created.</p>`,
+        code:[ {label:"Postgres: the table, the write and the relay", lang:"sql", code:`create table outbox (
+  id           bigint generated always as identity primary key,
+  aggregate    text        not null,
+  aggregate_id bigint      not null,
+  type         text        not null,
+  payload      jsonb       not null,
+  created_at   timestamptz not null default now(),
+  published_at timestamptz
+);
+create index on outbox (id) where published_at is null;   -- the relay's index
+
+-- The write and the event commit together, or neither does.
+begin;
+  insert into orders (customer_id, status, total_cents)
+       values (1, 'paid', 4999) returning id as order_id;
+  insert into outbox (aggregate, aggregate_id, type, payload)
+       values ('order', :order_id, 'order.paid',
+               jsonb_build_object('order_id', :order_id, 'total_cents', 4999));
+commit;
+
+-- The relay claims a batch. SKIP LOCKED lets several relay instances
+-- run at once without two of them taking the same row.
+update outbox set published_at = now()
+ where id in (select id from outbox where published_at is null
+              order by id limit 100 for update skip locked)
+returning id, type, payload;`} ],
+        tradeoff:`<p>The outbox is a table and a loop: no new infrastructure, debuggable with SQL, and it adds a write per event plus polling latency. Change data capture needs no application change at all and gives lower latency, at the cost of running a connector, managing replication slots, and publishing events whose shape is your database schema rather than a contract you chose. Prefer the outbox while you can: its events are deliberately designed, which is the next topic's whole concern. Move to CDC when the event volume makes polling expensive or when you need to capture changes from systems you cannot modify.</p>`,
+        pitfall:"Marking rows published before the broker confirms. A crash in that window loses the event permanently, which is the exact failure the outbox was built to prevent, reintroduced one line later.",
+        exercise:`<p>Implement the outbox for one event. Then test the thing it exists for: stop the broker, perform the operation, and confirm the order and its event row both committed. Restart the broker and confirm the event is delivered. Finally run two relay instances at once and confirm no event is published twice by them.</p>`,
+        refs:[] },
+
+      { id:"event-schemas", name:"Event schemas and versioning",
+        depth:"build", core:false,
+        line:"An event is a published contract, and you do not know who is reading it.",
+        what:`<p>Once an event is published, consumers you may not know about depend on its shape. Unlike an API, where you can see your callers, a pub/sub event can be consumed by a team that never told you. That makes event schemas harder to change than API responses, not easier.</p>
+              <p>A second decision sits alongside: how much state to carry. A thin event says what happened; a fat one includes the data, so consumers do not have to call back.</p>`,
+        use:`<p>You rename a field in <code>order.paid</code> from <code>total</code> to <code>total_cents</code> to make the unit explicit. Three consumers break. Two are yours and one belongs to a team that subscribed six months ago without telling you, and whose consumer now silently reads undefined and writes zero into a report.</p>`,
+        concepts:[
+          ["Additive only","Add optional fields; never remove, rename or retype one. The same rule as an API, with less visibility into who is affected."],
+          ["Event envelope","Every event carries an id, a type, a version, a timestamp and the subject it concerns. The envelope is stable even when payloads differ."],
+          ["Thin versus fat","A thin event carries ids and makes consumers fetch; a fat one carries the data. Fat avoids a call-back storm and can be stale by the time it is read."],
+          ["Past tense, business language","<code>order.paid</code>, not <code>order_table_updated</code>. An event describes something that happened in the domain, not a row that changed."],
+          ["Schema registry","A central place where event schemas live and compatibility is checked at publish time. Worth it once more than one team produces events."]
+        ],
+        how:`<p>Fix the envelope first, because it is what lets consumers route, deduplicate and order without understanding the payload. Then treat payload changes as strictly additive, and when you genuinely must break the shape, publish a new event type alongside the old and retire the old one the way the API versioning topic describes.</p>`,
+        code:[ {label:"An envelope worth standardising", lang:"json", code:`{
+  "id":          "01J9F0G7Q0X2",
+  "type":        "order.paid",
+  "version":     1,
+  "occurred_at": "2026-11-12T07:41:03.118Z",
+  "subject":     "order/8841",
+  "producer":    "orders-service",
+  "data": {
+    "order_id":    8841,
+    "customer_id": 42,
+    "total_cents": 4999,
+    "currency":    "INR"
+  }
+}
+
+id          deduplication, and the key the consumer records
+type        routing, and what tells a consumer to care
+version     lets a consumer handle two shapes during a migration
+occurred_at when it happened, not when it was delivered
+subject     the entity, so a consumer can order by it
+data        the payload, and the only part that may differ by type`} ],
+        tradeoff:`<p>Thin events keep the contract small and force every consumer to call back, which turns one event into a burst of requests against the producer, precisely when something interesting just happened. Fat events avoid that and mean the data in the event is a snapshot that may already be stale, and that you are publishing fields consumers will come to depend on. The usual balance: carry the identifiers plus the few fields that describe what changed, and let consumers fetch the rest if they need it. Avoid publishing your whole entity, because every field in the event becomes part of the contract.</p>`,
+        pitfall:"Publishing your database row as the event. The event's schema is now your table's schema, so a column rename is a breaking change for every consumer, and internal fields you never meant to share are public.",
+        exercise:`<p>Take one event your system publishes and write down its envelope and payload. Check whether it has an id, a type, a version and a timestamp. Then find out who consumes it: if you cannot answer with certainty, that uncertainty is the reason the additive-only rule exists.</p>`,
+        refs:[ ["CloudEvents specification","https://cloudevents.io/"] ] },
+
+      { id:"sagas", name:"Sagas and compensation",
+        depth:"understand", core:false,
+        line:"First ask whether these steps should be one service and one transaction, because usually they should.",
+        what:`<p>When a business operation spans several services, each with its own database, there is no transaction across them. A saga is the usual answer: a sequence of local transactions, each with a compensating action that undoes it if a later step fails.</p>
+              <p>Before adopting one, consider that a saga is a distributed state machine with partial failure in it, and that the most common reason to need one is a service boundary drawn in the wrong place.</p>`,
+        use:`<p>Placing an order reserves stock, charges the card and books a courier, in three services. The courier booking fails. The stock is reserved and the card is charged, and something has to release the stock and refund the card. That sequence of undo steps, in order, is the saga.</p>`,
+        concepts:[
+          ["Local transaction per step","Each service commits its own step independently. There is no global rollback, only forward steps and compensating ones."],
+          ["Compensation is not rollback","A refund is not an un-charge: the charge happened, the statement shows both, and the money moved twice. Compensation is a new business fact."],
+          ["Orchestration","A coordinator holds the state machine and tells each service what to do. Easy to see and to debug; the coordinator is a component to own."],
+          ["Choreography","Each service reacts to events and emits its own. No coordinator, and no single place where the whole flow is visible, which makes debugging hard at four or more steps."],
+          ["Intermediate states are visible","Unlike a transaction, a saga's half-finished state is readable by everyone. The model has to allow for an order that is paid but not yet booked."]
+        ],
+        how:`<p>Start by asking whether the steps belong together. If two services are always modified in one business operation and are never useful apart, that is strong evidence they are one service with one database and one transaction, which is simpler than any saga.</p>
+              <p>If they genuinely are separate, prefer orchestration: a single component holding the state machine, with each step and each compensation recorded. It is easier to answer "where is this order stuck" when one component knows the answer.</p>`,
+        code:[ {label:"The shape, including what can still go wrong", code:`place_order saga:
+
+  step             forward                compensation
+  1  stock         reserve(order)         release(order)
+  2  payment       charge(card, key)      refund(charge_id)
+  3  logistics     book(courier)          cancel(booking)
+
+If step 3 fails, run 2's then 1's compensation, in reverse order.
+
+The parts people skip:
+  - compensations fail too. They need retries and their own dead
+    letter, and a stuck compensation needs a human.
+  - every step and compensation must be idempotent: the saga will be
+    resumed after a crash and steps will re-run.
+  - the intermediate states are real. "paid but not booked" has to be
+    a legitimate order status, visible to support, not an impossible
+    state your model forbids.
+  - some steps cannot be compensated. An email has been sent. Put
+    those last, after everything that can still fail.`} ],
+        tradeoff:`<p>Orchestration centralises the flow: one place to read it, one place to query stuck instances, one more service to run. Choreography has no coordinator and spreads the flow across every participant, so adding a step means changing two services and the complete flow exists only in a diagram that drifts. Choreography is fine for two or three steps with genuinely independent reactions. Past that, the lack of a single place to ask "what happened to this order" is the cost that dominates, and orchestration is worth the component.</p>`,
+        pitfall:"Modelling compensation as rollback and hiding the intermediate states. The customer sees a charge and a refund on their statement, support sees an order status that is not supposed to exist, and the model has no way to represent either.",
+        exercise:`<p>Take a multi-service operation and write the table above for it: each step, its compensation, and whether that compensation can fail. Then find the first step that cannot be compensated and check it runs last. Finally, ask whether the first two services could simply be one, and what you would lose if they were.</p>`,
+        refs:[] },
+
+      { id:"read-models", name:"Read models, projections and when CQRS is worth it",
+        depth:"understand", core:false,
+        line:"A second model shaped for reading, with staleness as the price and complexity as the risk.",
+        what:`<p>Sometimes the shape that is right for writing is wrong for reading. A normalized order model is correct and needs six joins to render a dashboard. A projection is a separate, denormalized model built from the write model and kept up to date, which the dashboard reads directly.</p>
+              <p>That split is what CQRS names. It is useful and it is routinely over-applied, usually by being adopted as an architecture rather than for a specific query.</p>`,
+        use:`<p>A seller dashboard aggregates orders, payments, refunds and shipping across a year. The query takes eight seconds and locks tables other requests need. A projection table, updated as events arrive, answers the same page in twenty milliseconds, and is allowed to be a few seconds behind.</p>`,
+        concepts:[
+          ["Projection","A table built for one read pattern, derived from the write model. Disposable by design: you can delete and rebuild it."],
+          ["Rebuildable","The critical property. If the projection can be regenerated from the source, a bug in it is a rebuild rather than a data loss."],
+          ["Eventual consistency","The projection lags. The user interface must be honest about that, especially right after a write by the same user."],
+          ["CQRS","Separate read and write models. Worth it for a specific expensive query; a liability as a blanket architecture."],
+          ["Event sourcing","Storing the events as the source of truth and deriving all state from them. A much larger commitment, discussed below."]
+        ],
+        how:`<p>Add a projection for one query that is genuinely slow, and keep the write model as the source of truth. Update it from events or from the outbox, record the position it has processed up to, and write the rebuild script on day one, because you will need it when the projection logic has a bug.</p>
+              <p>Then make the staleness visible rather than hoping nobody notices: show when the view was last updated, or read the user's own recent changes from the write model, as the replication topic describes.</p>`,
+        tradeoff:`<p>Event sourcing deserves its own warning, because this is where read models often lead. Storing events as the source of truth gives you a complete audit log, time travel and projections for free. It also makes every schema change a question about historical events you can never alter, makes debugging a matter of replaying history, and requires every developer on the team to understand it. It is genuinely right where the event log <em>is</em> the product — ledgers, audit systems, anything regulated where the sequence of changes is the thing being sold. It is a poor default for a service that mostly stores current state, and the usual outcome of adopting it for that is a team maintaining a hand-rolled database.</p>`,
+        pitfall:"Building a projection with no rebuild path. The first bug in the projection logic leaves you with a table that is wrong, no way to regenerate it, and a choice between a manual data fix and telling users the numbers were incorrect.",
+        exercise:`<p>Find your slowest read query. Design the projection that would answer it in one indexed lookup, write the rebuild script first, then the incremental update. Measure both the query time and the lag. Then decide honestly whether the original query could have been fixed with an index, which is the answer surprisingly often.</p>`,
+        refs:[] }
+
+    ],
+    after:[
+      ["Pick the right shape","Queue, pub/sub or log, chosen by who needs the message and for how long."],
+      ["Survive a duplicate","Every consumer idempotent, with the dedup record committed alongside the effect."],
+      ["Choose a partition key","You can say what ordering it guarantees and what it does not."],
+      ["Handle failure deliberately","Transient and permanent separated, bounded retries, and a dead-letter queue with an alert."],
+      ["Never dual write","The event committed with the data, and a relay that can crash safely."],
+      ["Treat events as contracts","A stable envelope, additive payloads, and no database rows published raw."],
+      ["Question a saga","You can tell a real cross-service transaction from a boundary drawn in the wrong place."],
+      ["Add a projection safely","One slow query, a rebuild script written first, and honesty about lag."]
+    ],
+    sources:`<p>Verified while writing, against the live PostgreSQL 16.15 in this container: the outbox table with its partial index, the order and the event committing in one transaction, the relay claim using <code>FOR UPDATE SKIP LOCKED</code> returning the row exactly once, and the consumer dedup insert returning <code>INSERT 0 1</code> on the first delivery and <code>INSERT 0 0</code> on the duplicate.</p>
+      <p>Two topics deliberately argue against their own subject. The sagas topic opens by asking whether the services should be one service, because a saga is most often a symptom of a boundary in the wrong place. The read models topic treats event sourcing as a warning rather than a destination, and names the narrow case where it is right.</p>
+      <p>References, not retrieved while writing: the CloudEvents specification.</p>` }
 ];
 
 const DEPTH = { understand:"Understand", build:"Build" };
