@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Backend engineering route</title>
+<meta name="description" content="A practical backend engineering route: runtime and networking foundations, API design, databases, testing, security, caching, concurrency, messaging, reliability, observability, deployment and the distributed systems ideas you actually meet.">
+<meta property="og:title" content="Backend engineering route">
+<meta property="og:description" content="Fifteen stages from the request lifecycle to sharding, each topic with what it is, where you use it, how to build it and an exercise.">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧱</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#F6F8FC; --surface:#FFFFFF; --ink:#152033; --muted:#526078; --line:#DFE6F0;
+  --accent:#0F766E; --accent-soft:#D7F0ED; --accent-ink:#0B5952; --on-accent:#FFFFFF;
+  --fresher:#1F7A52; --fresher-bg:#E3F4EB;
+  --mid:#9A5B00; --mid-bg:#FDF0DA;
+  --senior:#9A2A66; --senior-bg:#FBE6F1;
+  --trap-bg:#FFF6E6; --trap-line:#F0C674;
+  --code-bg:#111A27; --code-ink:#E9E6F5;
+  --display:"Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --body:"Atkinson Hyperlegible", "Segoe UI", system-ui, sans-serif;
+  --mono:"JetBrains Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0F141C; --surface:#182130; --ink:#E8EEF7; --muted:#A3B0C4; --line:#2A3648;
+    --accent:#5ED3C4; --accent-soft:#10332F; --accent-ink:#A5E8DE; --on-accent:#0F141C;
+    --fresher:#6FD3A3; --fresher-bg:#17362A;
+    --mid:#F2B45C; --mid-bg:#3A2C14;
+    --senior:#F08BC0; --senior-bg:#3B1B2E;
+    --trap-bg:#2E2615; --trap-line:#7A5E22;
+    --code-bg:#0A1018; --code-ink:#E9E6F5;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0F141C; --surface:#182130; --ink:#E8EEF7; --muted:#A3B0C4; --line:#2A3648;
+  --accent:#5ED3C4; --accent-soft:#10332F; --accent-ink:#A5E8DE; --on-accent:#0F141C;
+  --fresher:#6FD3A3; --fresher-bg:#17362A;
+  --mid:#F2B45C; --mid-bg:#3A2C14;
+  --senior:#F08BC0; --senior-bg:#3B1B2E;
+  --trap-bg:#2E2615; --trap-line:#7A5E22;
+  --code-bg:#0A1018; --code-ink:#E9E6F5;
+}
+*,*::before,*::after{box-sizing:inherit}
+html{scroll-padding-top:calc(env(safe-area-inset-top,0px) + 80px)}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);font-size:17px;line-height:1.6;-webkit-font-smoothing:antialiased}
+.wrap{max-width:760px;margin:0 auto;padding:0 20px}
+a{color:var(--accent-ink)}
+a:focus-visible,button:focus-visible,summary:focus-visible{outline:3px solid var(--accent);outline-offset:3px;border-radius:6px}
+code{font-family:var(--mono);font-size:.86em;background:var(--accent-soft);color:var(--accent-ink);padding:.1em .35em;border-radius:5px}
+
+/* Hero */
+.hero{padding:64px 20px 28px}
+.hero h1{font-family:var(--display);font-weight:700;font-size:clamp(2.2rem,6vw,3.4rem);line-height:1.05;letter-spacing:-.02em;margin:0 0 16px}
+.hero p{font-size:1.15rem;color:var(--muted);max-width:34em;margin:0}
+
+/* Phase track: the one bold element */
+.track{margin:36px 0 8px;padding:20px 0 4px;overflow-x:auto}
+.track ol{list-style:none;margin:0;padding:0;display:flex;min-width:640px;position:relative}
+.track ol::before{content:"";position:absolute;top:15px;left:16px;right:16px;height:3px;background:var(--line);border-radius:3px}
+.track li{flex:1;position:relative;display:flex;flex-direction:column;align-items:center;text-align:center;font-size:.8rem;color:var(--muted);line-height:1.3;padding:0 2px}
+.dot{width:33px;height:33px;border-radius:50%;display:grid;place-items:center;font-family:var(--display);font-weight:700;font-size:.9rem;background:var(--surface);border:2px solid var(--line);color:var(--muted);position:relative;z-index:1;margin-bottom:8px}
+.track li.done .dot{background:var(--accent-soft);border-color:var(--accent);color:var(--accent-ink)}
+.track li.now .dot{background:var(--accent);border-color:var(--accent);color:var(--on-accent);box-shadow:0 0 0 6px var(--accent-soft)}
+.track li.now{color:var(--ink);font-weight:700}
+.track-note{font-size:.9rem;color:var(--muted);margin:10px 0 0}
+
+/* Toolbar */
+.toolbar{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-bottom:1px solid var(--line);margin-top:28px}
+.toolbar .wrap{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding-top:12px;padding-bottom:12px}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{font:inherit;font-size:.9rem;border:1.5px solid var(--line);background:var(--surface);color:var(--ink);padding:6px 14px;border-radius:999px;cursor:pointer}
+.chip[aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.spacer{flex:1}
+.ghost{font:inherit;font-size:.9rem;background:none;border:none;color:var(--accent-ink);cursor:pointer;padding:6px 4px;text-decoration:underline;text-underline-offset:3px}
+
+/* How to read */
+.howto{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:20px 22px;margin:28px 0 0}
+.howto h2{font-family:var(--display);font-size:1.15rem;margin:0 0 8px}
+.howto p{margin:0 0 10px;color:var(--muted)}
+.howto p:last-child{margin:0}
+.levels{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 12px}
+
+/* Level pills */
+.lvl{display:inline-block;font-size:.78rem;font-weight:700;padding:3px 10px;border-radius:999px;white-space:nowrap}
+.lvl.fresher{background:var(--fresher-bg);color:var(--fresher)}
+.lvl.mid{background:var(--mid-bg);color:var(--mid)}
+.lvl.senior{background:var(--senior-bg);color:var(--senior)}
+.lvl.build{background:var(--senior-bg);color:var(--senior)}
+.lvl.understand{background:var(--accent-soft);color:var(--accent-ink)}
+.lvl.core{background:var(--mid-bg);color:var(--mid)}
+@media (max-width:560px){.t-meta{flex-wrap:wrap;justify-content:flex-end}}
+
+/* Stage headings */
+.phase-title{font-family:var(--display);font-size:1rem;color:var(--accent-ink);margin:0;font-weight:500}
+.topic-title{font-family:var(--display);font-weight:700;font-size:clamp(1.9rem,5vw,2.5rem);letter-spacing:-.02em;line-height:1.1;margin:4px 0 10px}
+.topic-intro{color:var(--muted);font-size:1.08rem;margin:0}
+.jump{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 0}
+.jump a{font-size:.92rem;background:var(--accent-soft);color:var(--accent-ink);padding:5px 12px;border-radius:999px;text-decoration:none}
+.jump a:hover{text-decoration:underline}
+details.reveal{margin:14px 0 0}
+details.reveal > summary{display:block;width:fit-content;cursor:pointer;font-weight:700;color:var(--accent-ink);background:var(--accent-soft);padding:7px 14px;border-radius:999px;list-style:none}
+details.reveal > summary::-webkit-details-marker{display:none}
+details.reveal[open] > summary{margin-bottom:2px}
+.track li a{color:inherit;text-decoration:none;display:flex;flex-direction:column;align-items:center}
+.track li a:hover{text-decoration:underline}
+
+/* Stages */
+.stage{margin:72px 0 0;padding-top:40px;border-top:2px solid var(--line)}
+.stage:first-child{border-top:none;padding-top:8px;margin-top:40px}
+.stage-progress{font-size:.9rem;color:var(--muted);margin:10px 0 0}
+
+/* Topic card: tick column + collapsible card */
+.topic{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:start;margin:0 0 10px}
+.t-check{position:relative;display:block;width:22px;height:22px;margin-top:15px;cursor:pointer}
+.t-check input{position:absolute;opacity:0;width:22px;height:22px;margin:0;cursor:pointer}
+.t-check span{position:absolute;inset:0;border:2px solid var(--line);border-radius:6px;background:var(--surface);pointer-events:none}
+.t-check input:checked + span{background:var(--accent);border-color:var(--accent)}
+.t-check input:checked + span::after{content:"";position:absolute;left:6px;top:2px;width:5px;height:11px;border:solid var(--on-accent);border-width:0 2.5px 2.5px 0;transform:rotate(45deg)}
+.t-check input:focus-visible + span{outline:3px solid var(--accent);outline-offset:2px}
+.topic.done .t-name{text-decoration:line-through;text-decoration-color:var(--muted)}
+.topic.done details.topic-card{opacity:.72}
+
+details.topic-card{background:var(--surface);border:1px solid var(--line);border-radius:14px;min-width:0;transition:border-color .15s}
+details.topic-card[open]{border-color:var(--accent)}
+details.topic-card > summary{list-style:none;cursor:pointer;padding:14px 18px;display:grid;grid-template-columns:1fr auto;gap:4px 14px;align-items:start}
+details.topic-card > summary::-webkit-details-marker{display:none}
+.t-name{font-weight:700;font-size:1.05rem;line-height:1.35;grid-column:1;grid-row:1}
+.t-line{color:var(--muted);font-size:.95rem;grid-column:1;grid-row:2}
+.t-meta{display:flex;align-items:center;gap:8px;grid-column:2;grid-row:1 / span 2}
+.chev{width:22px;height:22px;flex:none;color:var(--muted);transition:transform .2s}
+details.topic-card[open] .chev{transform:rotate(180deg);color:var(--accent)}
+.t-body{padding:0 18px 18px;border-top:1px dashed var(--line)}
+.t-h{font-family:var(--display);font-weight:700;font-size:1rem;letter-spacing:.005em;color:var(--accent-ink);margin:18px 0 0}
+.t-body p{margin:8px 0 0}
+.t-body ul,.t-body ol{margin:8px 0 0;padding-left:1.3em}
+.t-body li{margin:4px 0}
+.t-use{background:var(--accent-soft);border-radius:12px;padding:2px 16px 14px;margin:16px 0 0}
+.t-use .t-h{margin-top:14px}
+dl.t-concepts{margin:8px 0 0;display:grid;grid-template-columns:minmax(130px,210px) 1fr;gap:0}
+dl.t-concepts dt,dl.t-concepts dd{padding:9px 0;border-top:1px solid var(--line);margin:0}
+dl.t-concepts dt{font-weight:700;padding-right:14px}
+@media (max-width:560px){dl.t-concepts{grid-template-columns:1fr}dl.t-concepts dd{border-top:none;padding-top:0}}
+figure.snip{margin:14px 0 0}
+figure.snip figcaption{font-size:.8rem;font-weight:700;color:var(--muted);margin:0 0 4px}
+figure.snip pre{margin:0}
+.label{font-weight:700}
+.overall-progress{font-size:.9rem;color:var(--muted)}
+pre{background:var(--code-bg);color:var(--code-ink);font-family:var(--mono);font-size:.84rem;line-height:1.55;padding:16px 18px;border-radius:12px;overflow-x:auto;margin:14px 0 0}
+pre code{background:none;color:inherit;padding:0;font-size:inherit}
+/* Syntax highlighting (highlight.js tokens; code blocks are dark in both themes) */
+.hljs-keyword,.hljs-built_in.hljs-keyword{color:#C792EA}
+.hljs-string{color:#B5E08C}
+.hljs-number,.hljs-literal{color:#F5A97F}
+.hljs-comment{color:#A29DB8;font-style:italic}
+.hljs-title.function_,.hljs-title{color:#82AAFF}
+.hljs-title.class_,.hljs-built_in,.hljs-type{color:#FFCB6B}
+.hljs-meta{color:#F78C6C}
+.hljs-attr,.hljs-variable{color:#F0C6FF}
+.hljs-params,.hljs-subst{color:inherit}
+.hljs-operator{color:#89DDFF}
+.trap{background:var(--trap-bg);border-left:4px solid var(--trap-line);padding:12px 14px;border-radius:0 10px 10px 0;margin:14px 0 0}
+.trap p{margin:0}
+.src{font-size:.85rem;color:var(--muted)}
+.tbl{overflow-x:auto;margin:14px 0 0}
+table{border-collapse:collapse;width:100%;font-size:.92rem}
+th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-weight:700;color:var(--muted);font-size:.85rem}
+.hidden{display:none}
+
+/* Revision */
+.revise{background:var(--accent-soft);border-radius:18px;padding:24px 22px;margin:56px 0 0}
+.revise h2{font-family:var(--display);font-size:1.5rem;margin:0 0 4px}
+.revise > p{margin:0 0 14px;color:var(--muted)}
+.revise dl{margin:0;display:grid;grid-template-columns:minmax(120px,190px) 1fr;gap:0}
+.revise dt,.revise dd{padding:10px 0;border-top:1px solid color-mix(in srgb,var(--accent) 22%,transparent);margin:0}
+.revise dt{font-weight:700;padding-right:14px}
+@media (max-width:560px){.revise dl{grid-template-columns:1fr}.revise dd{border-top:none;padding-top:0}}
+
+/* Sources + footer */
+.sources{margin:48px 0 0}
+.sources summary{cursor:pointer;font-family:var(--display);font-size:1.1rem;font-weight:500}
+.sources ul{padding-left:1.2em;color:var(--muted);font-size:.92rem}
+.sources p{color:var(--muted);font-size:.92rem}
+footer{margin:56px 0 64px;padding-top:24px;border-top:1px solid var(--line);color:var(--muted);font-size:.95rem}
+
+
+.foot-links{display:flex;flex-wrap:wrap;gap:8px 22px}
+
+/* Link back to the landing page */
+.home-link{display:inline-block;font-size:.95rem;font-weight:700;color:var(--accent-ink);text-decoration:none;margin:0 0 18px;padding:4px 0}
+.home-link:hover{text-decoration:underline;text-underline-offset:3px}
+
+/* Capstone */
+.cap{margin:14px 0 0}
+.cap h3{font-family:var(--display);font-weight:700;font-size:1.25rem;margin:28px 0 6px}
+.cap h4{font-family:var(--display);font-weight:700;font-size:1.02rem;margin:18px 0 4px}
+.cap p{margin:8px 0 0}
+.cap ul,.cap ol{margin:8px 0 0;padding-left:1.3em}
+.cap li{margin:5px 0}
+.cap .ms{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin:14px 0 0}
+.cap .ms h4{margin-top:0}
+.cap .ms .uses{font-size:.9rem;color:var(--muted);margin-top:8px}
+.cap .ms .check{background:var(--accent-soft);border-radius:10px;padding:10px 14px;margin-top:10px}
+.cap .ms .check p{margin:0}
+.closing{background:var(--accent-soft);border-radius:18px;padding:26px 24px;margin:52px 0 0}
+.closing h3{margin-top:0}
+.closing p{margin:10px 0 0;font-size:1.05rem}
+
+/* Back to top */
+.to-top{position:fixed;right:calc(20px + env(safe-area-inset-right,0px));bottom:calc(20px + env(safe-area-inset-bottom,0px));z-index:10;width:48px;height:48px;border-radius:50%;border:none;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;cursor:pointer;box-shadow:0 6px 18px color-mix(in srgb,var(--accent) 35%,transparent);opacity:0;transform:translateY(12px);pointer-events:none;transition:opacity .2s,transform .2s}
+.to-top.show{opacity:1;transform:none;pointer-events:auto}
+.to-top:hover{background:var(--accent-ink)}
+.to-top svg{width:22px;height:22px}
+@media (max-width:560px){.to-top{width:44px;height:44px;right:calc(14px + env(safe-area-inset-right,0px));bottom:calc(14px + env(safe-area-inset-bottom,0px))}}
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+
+</style>
+</head>
+<body>
+
+<header class="wrap hero">
+  <a class="home-link" href="../">All tracks</a>
+  <h1>Backend engineering route</h1>
+  <p>What a backend engineer needs to build, debug, operate and scale a real service. Fifteen stages in order, each topic with what it is, where you use it, how to build it, and something to build.</p>
+
+  <nav class="track" aria-label="Route phases">
+    <ol>
+      <li class="done"><a href="#foundations"><span class="dot">1</span>Foundations</a></li>
+      <li class="done"><a href="#apis"><span class="dot">2</span>Build the service</a></li>
+      <li class="done"><a href="#security"><span class="dot">3</span>Secure and fast</a></li>
+      <li class="done"><a href="#concurrency"><span class="dot">4</span>Async and integrate</a></li>
+      <li class="done"><a href="#reliability"><span class="dot">5</span>Operate</a></li>
+      <li class="done"><a href="#distributed"><span class="dot">6</span>Scale</a></li>
+    </ol>
+  </nav>
+  <p class="track-note">Six phases, fifteen stages. Work in order: each stage assumes the ones before it. Short on time? Filter to <em>Core only</em> for the spine of the route.</p>
+</header>
+
+<div class="toolbar">
+  <div class="wrap">
+    <div class="chips" role="group" aria-label="Filter topics">
+      <button class="chip" data-filter="all" aria-pressed="true">All topics</button>
+      <button class="chip" data-filter="core" aria-pressed="false">Core only</button>
+      <button class="chip" data-filter="build" aria-pressed="false">Build</button>
+      <button class="chip" data-filter="understand" aria-pressed="false">Understand</button>
+    </div>
+    <span class="spacer"></span>
+    <span class="overall-progress" aria-live="polite"></span>
+    <button class="ghost" id="toggleAll">Open all topics</button>
+  </div>
+</div>
+
+<main class="wrap">
+  <section class="howto">
+    <h2>How to use this page</h2>
+    <div class="levels">
+      <span class="lvl core">Core · the spine, do these first</span>
+      <span class="lvl build">Build · implement it yourself</span>
+      <span class="lvl understand">Understand · know the trade-off, reach for a library</span>
+    </div>
+    <p>Every topic has the same parts: what it is and why it matters, a concrete case, the core concepts, how to build it, the trade-offs, the pitfall people hit, and an exercise. Tick a topic when you have built or can explain it.</p>
+    <p>Code is pseudocode unless a snippet is labelled with a language. Real snippets are Node, with C# where a second language makes the point clearer, plus real SQL and config. Nothing here assumes a particular framework. The capstone at the end composes the exercises into one service.</p>
+    <nav class="jump" id="jump" aria-label="Jump to stage"></nav>
+  </section>
+
+  <div id="content"></div>
+
+  <footer><p>That's the route. The capstone is the real test: build the order service end to end, then come back and tick the topics you had to reread.</p><p class="foot-links"><a href="../">All tracks</a><a href="../dsa/">DSA patterns</a><a href="https://github.com/harsh07may/interview-prep">Source on GitHub</a></p></footer>
+</main>
+
+<button class="to-top" id="toTop" type="button" aria-label="Back to top" title="Back to top" tabindex="-1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
+
+<script>
+const stages = [
+  { num:1, id:"foundations", phase:1, name:"Runtime foundations",
+    intro:"What a running backend is made of, before any framework.",
+    topics:[
+
+      { id:"request-path", name:"The path of a request, end to end",
+        depth:"understand", core:true,
+        line:"Every hop between a client's click and your handler, and what can go wrong at each.",
+        what:`<p>A request crosses name resolution, a TCP connection, a TLS handshake, usually a proxy or load balancer, your process, and whatever your code calls, before anything comes back. Most production confusion comes from not knowing which hop failed: a 504 from a proxy and a timeout in your client look much the same from one log line, but they have different fixes.</p>
+              <p>This topic is the map. Each hop is covered in depth later, and this is where you learn which stage covers which.</p>`,
+        use:`<p>An endpoint "times out" for one customer and nobody else. Knowing the path tells you what to ask: does the name resolve for them, does the TLS handshake complete, did the proxy log the request at all, did your handler start, did the query finish. Four of those five rule out your code entirely, and you can answer them in minutes instead of reading the handler again.</p>`,
+        concepts:[
+          ["Resolution","The client turns a hostname into an address. It is cached at several layers, each with its own TTL, which is why a DNS change does not take effect everywhere at once."],
+          ["Connection","A TCP handshake costs a round trip; TLS costs one or two more. Reusing connections is the cheapest latency win there is, and it is covered in the networking stage."],
+          ["The edge","A proxy or load balancer usually terminates TLS, picks a backend, and applies its own timeouts and body size limits, separately from yours."],
+          ["Your process","One request occupies a thread, a task, or a turn of an event loop. What that costs decides how many requests you can serve at once."],
+          ["Downstream","Your database, your cache and the APIs you call. Each is another hop with its own timeout, and each can fail while the rest succeed."]
+        ],
+        how:`<p>Trace one real request through your own stack and write down the hops with a measured number against each. You do not need tooling for the client-side split: curl will print it.</p>`,
+        code:[ {label:"Where the time actually goes", lang:"bash", code:`curl -w '
+dns      %{time_namelookup}s
+connect  %{time_connect}s
+tls      %{time_appconnect}s
+sent     %{time_pretransfer}s
+first    %{time_starttransfer}s
+total    %{time_total}s
+' -o /dev/null -s https://example.com/api/orders`} ],
+        tradeoff:`<p>Read the numbers as differences, not absolutes. <code>connect</code> minus <code>dns</code> is the TCP handshake, <code>tls</code> minus <code>connect</code> is the TLS handshake, and <code>first</code> minus <code>sent</code> is the server actually working. If <code>first</code> is close to <code>total</code>, the server is slow to start responding; if <code>total</code> is much larger, the response body is slow to transfer, which is a different problem with a different fix.</p>`,
+        pitfall:"Treating a slow response as an application problem before splitting the timing. A handshake that costs 300ms on every call, because connections are not being reused, is invisible in application metrics and obvious in these six numbers.",
+        exercise:`<p>Run the command above against one endpoint of a service you work on, from a machine outside its network. Write down the six numbers. Then run it twice in a row over a reused connection and note which numbers collapse to near zero. Keep the figures: the caching and performance stage asks you to compare against them.</p>`,
+        refs:[ ["curl manual: the --write-out variables","https://curl.se/docs/manpage.html"] ] }
+
+    ],
+    after:[
+      ["Read a request's timing","You can split a slow request into hops and say which hop is slow, before touching the code."]
+    ],
+    sources:`<p>Reference, not retrieved while writing: the curl manual, for the <code>--write-out</code> timing variables. The command was run before publishing and its variable names are correct. The hop-by-hop behaviour sketched here is standard, and is covered with sources in the networking and the edge stage.</p>` }
+];
+
+const DEPTH = { understand:"Understand", build:"Build" };
+const chev = '<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>';
+const content = document.getElementById('content');
+const esc = (s) => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+function renderTopic(t){
+  const wrap = document.createElement('div');
+  wrap.className = 'topic';
+  wrap.id = t.id;
+  wrap.dataset.topic = t.id;
+  wrap.dataset.depth = t.depth;
+  wrap.dataset.core = String(!!t.core);
+
+  let body = `<h4 class="t-h">What and why</h4>${t.what}`;
+  body += `<div class="t-use"><h4 class="t-h">In practice</h4>${t.use}</div>`;
+  body += `<h4 class="t-h">Core concepts</h4><dl class="t-concepts">`
+        + t.concepts.map(([k,v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('') + `</dl>`;
+  body += `<h4 class="t-h">How to build it</h4>${t.how}`;
+  (t.code || []).forEach(() => { body += `<figure class="snip"><figcaption></figcaption><pre><code></code></pre></figure>`; });
+  if (t.tradeoff) body += `<h4 class="t-h">Trade-offs</h4>${t.tradeoff}`;
+  if (t.pitfall) body += `<div class="trap"><p><span class="label">Pitfall:</span> ${t.pitfall}</p></div>`;
+  if (t.exercise) body += `<details class="reveal"><summary>Exercise</summary>${t.exercise}</details>`;
+  if (t.refs) body += `<p class="src">References: ` + t.refs.map(([l,u]) => `<a href="${u}" target="_blank" rel="noopener">${l}</a>`).join(', ') + `</p>`;
+
+  const pills = (t.core ? `<span class="lvl core">Core</span>` : '')
+              + `<span class="lvl ${t.depth}">${DEPTH[t.depth]}</span>`;
+  wrap.innerHTML =
+    `<label class="t-check"><input type="checkbox" aria-label="Mark ${esc(t.name)} as done"><span></span></label>`
+  + `<details class="topic-card"><summary><span class="t-name">${t.name}</span>`
+  + `<span class="t-meta">${pills}${chev}</span><span class="t-line">${t.line}</span></summary>`
+  + `<div class="t-body">${body}</div></details>`;
+
+  (t.code || []).forEach((c, i) => {
+    const fig = wrap.querySelectorAll('figure.snip')[i];
+    fig.querySelector('figcaption').textContent = c.label;
+    const el = fig.querySelector('code');
+    el.textContent = c.code;
+    if (c.lang) el.dataset.lang = c.lang;
+  });
+  return wrap;
+}
+
+stages.forEach(s => {
+  const sec = document.createElement('section');
+  sec.className = 'stage';
+  sec.id = s.id;
+  sec.dataset.stage = String(s.num);
+  sec.innerHTML = `<p class="phase-title">Stage ${s.num}</p><h2 class="topic-title">${s.name}</h2>`
+                + `<p class="topic-intro">${s.intro}</p><p class="stage-progress" aria-live="polite"></p>`;
+  if (s.custom) sec.insertAdjacentHTML('beforeend', s.custom);
+  (s.topics || []).forEach(t => sec.appendChild(renderTopic(t)));
+  if (s.after) {
+    const a = document.createElement('section');
+    a.className = 'revise';
+    a.innerHTML = `<h2>After this stage you can</h2><p>If you can do these, move on.</p><dl>`
+                + s.after.map(([k,v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('') + `</dl>`;
+    sec.appendChild(a);
+  }
+  if (s.sources) {
+    const d = document.createElement('details');
+    d.className = 'sources';
+    d.innerHTML = `<summary>Sources for this stage</summary>${s.sources}`;
+    sec.appendChild(d);
+  }
+  content.appendChild(sec);
+});
+
+document.getElementById('jump').innerHTML =
+  stages.map(s => `<a href="#${s.id}">${s.num}. ${s.name}</a>`).join('');
+
+// Progress: ticked topic ids, in this browser only.
+const KEY = "backend:done:v1";
+let done = new Set();
+try { done = new Set(JSON.parse(localStorage.getItem(KEY) || "[]")); } catch (e) {}
+const saveDone = () => { try { localStorage.setItem(KEY, JSON.stringify([...done])); } catch (e) {} };
+
+function refreshProgress(){
+  const all = document.querySelectorAll('.topic');
+  const n = [...all].filter(el => done.has(el.dataset.topic)).length;
+  const overall = document.querySelector('.overall-progress');
+  if (overall) overall.textContent = `${n} of ${all.length} done`;
+  document.querySelectorAll('.stage').forEach(st => {
+    const t = st.querySelectorAll('.topic');
+    const k = [...t].filter(el => done.has(el.dataset.topic)).length;
+    const el = st.querySelector('.stage-progress');
+    if (el) el.textContent = t.length ? `${k} of ${t.length} done in this stage` : '';
+  });
+}
+
+document.querySelectorAll('.topic').forEach(el => {
+  const box = el.querySelector('input[type=checkbox]');
+  box.checked = done.has(el.dataset.topic);
+  el.classList.toggle('done', box.checked);
+  box.addEventListener('change', () => {
+    box.checked ? done.add(el.dataset.topic) : done.delete(el.dataset.topic);
+    el.classList.toggle('done', box.checked);
+    saveDone(); refreshProgress();
+  });
+});
+
+// Filter: all | core | build | understand
+const chips = document.querySelectorAll('.chip');
+function applyFilter(mode){
+  chips.forEach(c => c.setAttribute('aria-pressed', String(c.dataset.filter === mode)));
+  document.querySelectorAll('.topic').forEach(el => {
+    const show = mode === 'all' ? true
+               : mode === 'core' ? el.dataset.core === 'true'
+               : el.dataset.depth === mode;
+    el.classList.toggle('hidden', !show);
+  });
+  document.querySelectorAll('.stage').forEach(st => {
+    const total = st.querySelectorAll('.topic').length;
+    const visible = st.querySelectorAll('.topic:not(.hidden)').length;
+    st.classList.toggle('hidden', total > 0 && visible === 0);
+  });
+  try { localStorage.setItem('backend:filter:v1', mode); } catch (e) {}
+}
+chips.forEach(c => c.addEventListener('click', () => applyFilter(c.dataset.filter)));
+let savedFilter = 'all';
+try { savedFilter = localStorage.getItem('backend:filter:v1') || 'all'; } catch (e) {}
+if (!['all','core','build','understand'].includes(savedFilter)) savedFilter = 'all';
+applyFilter(savedFilter);
+refreshProgress();
+
+// Open / close all
+const toggle = document.getElementById('toggleAll');
+toggle.addEventListener('click', () => {
+  const open = toggle.dataset.open !== 'true';
+  document.querySelectorAll('.topic:not(.hidden) details.topic-card').forEach(d => d.open = open);
+  toggle.dataset.open = String(open);
+  toggle.textContent = open ? 'Close all topics' : 'Open all topics';
+});
+
+// Back to top
+const toTop = document.getElementById('toTop');
+const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+function updateToTop(){
+  const show = window.scrollY > 700;
+  toTop.classList.toggle('show', show);
+  toTop.tabIndex = show ? 0 : -1;
+}
+window.addEventListener('scroll', updateToTop, { passive: true });
+updateToTop();
+toTop.addEventListener('click', () => {
+  window.scrollTo({ top: 0, behavior: reduceMotion ? 'auto' : 'smooth' });
+  const first = document.querySelector('.hero h1');
+  if (first) { first.setAttribute('tabindex', '-1'); first.focus({ preventScroll: true }); }
+});
+
+// Open a collapsed card when a link or the URL points at it.
+(function(){
+  function openTo(id){
+    const el = id && document.getElementById(id);
+    if (!el) return;
+    const card = el.querySelector(':scope > details.topic-card');
+    if (card) card.open = true;
+    for (let d = el.closest('details'); d; d = d.parentElement && d.parentElement.closest('details')) d.open = true;
+  }
+  document.addEventListener('click', e => {
+    const a = e.target.closest('a[href^="#"]');
+    if (a) openTo(decodeURIComponent(a.getAttribute('href').slice(1)));
+  });
+  window.addEventListener('hashchange', () => openTo(decodeURIComponent(location.hash.slice(1))));
+  if (location.hash) {
+    const id = decodeURIComponent(location.hash.slice(1));
+    openTo(id);
+    const t = document.getElementById(id);
+    if (t) t.scrollIntoView();
+  }
+})();
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>
+// Highlight every code block. The language is chosen here rather than auto-detected,
+// because auto-detection misreads short snippets. A snippet declares its language with
+// lang ("js", "cs", "sql", "yaml", "bash", "json"). Dockerfile and nginx config are not
+// in highlight.js 11.9.0's common bundle, and an unlabelled snippet is pseudocode, so
+// both are left plain on purpose: mis-highlighted pseudocode reads worse than none.
+(function(){
+  if (!window.hljs) return;
+  const map = { js:'javascript', cs:'csharp', sql:'sql', yaml:'yaml', bash:'bash', json:'json' };
+  document.querySelectorAll('pre code').forEach(el => {
+    const lang = map[el.dataset.lang];
+    if (!lang) return;
+    el.classList.add('language-' + lang);
+    try { hljs.highlightElement(el); } catch (e) {}
+  });
+})();
+</script>
+</body>
+</html>
