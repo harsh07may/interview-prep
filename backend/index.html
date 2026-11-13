@@ -147,6 +147,27 @@ pre code{background:none;color:inherit;padding:0;font-size:inherit;overflow-wrap
 .hljs-title.class_,.hljs-built_in,.hljs-type{color:#FFCB6B}.hljs-attr,.hljs-variable{color:#F0C6FF}
 .hljs-meta{color:#F78C6C}.hljs-operator{color:#89DDFF}.hljs-params,.hljs-subst{color:inherit}
 
+/* key terms */
+.terms{margin:18px 0 0;border:1px solid var(--line);border-radius:10px;background:var(--surface);
+  padding:4px 16px 12px}
+.terms h4{font-family:var(--display);font-size:11px;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--muted);margin:12px 0 2px;font-weight:700}
+.terms dl{margin:0;display:grid;grid-template-columns:minmax(96px,150px) 1fr;gap:0}
+.terms dt,.terms dd{padding:7px 0;border-top:1px solid var(--line-soft);margin:0;font-size:14.6px}
+.terms dt{font-weight:700;padding-right:14px;color:var(--accent-ink)}
+.terms dt:first-of-type,.terms dt:first-of-type + dd{border-top:none}
+@media (max-width:560px){.terms dl{grid-template-columns:1fr}.terms dd{border-top:none;padding-top:0}}
+
+/* glossary */
+.gloss{max-width:50rem}
+.gloss .letter{font-family:var(--display);font-size:13px;font-weight:700;color:var(--accent-ink);
+  margin:22px 0 2px;letter-spacing:.06em}
+.gloss dl{margin:0;display:grid;grid-template-columns:minmax(130px,210px) 1fr;gap:0}
+.gloss dt,.gloss dd{padding:9px 0;border-top:1px solid var(--line-soft);margin:0;font-size:15px}
+.gloss dt{font-weight:700;padding-right:14px}
+.gloss dd a{font-size:12.5px;color:var(--muted);white-space:nowrap}
+@media (max-width:560px){.gloss dl{grid-template-columns:1fr}.gloss dd{border-top:none;padding-top:0}}
+
 /* points */
 ul.pts{list-style:none;margin:16px 0 0;padding:0}
 ul.pts li{position:relative;padding:0 0 0 20px;margin:7px 0;font-size:15.3px}
@@ -290,43 +311,55 @@ total    %{time_total}s
            connection, and note which numbers collapse to zero.`,
     refs:[["curl: --write-out","https://curl.se/docs/manpage.html"]] },
 
-  { id:"http-semantics", name:"HTTP semantics", depth:"build", core:true,
-    why:`Clients branch on the status code, caches store by it, and retries depend on whether a method
-         is safe to repeat. Getting this right costs nothing now and saves a class of bug later.`,
-    code:[{label:"Express: codes that mean something", lang:"js", code:`app.post('/orders', async (req, res) => {
+  { id:"http-semantics", name:"HTTP methods and status codes", depth:"build", core:true,
+  why:`Every request starts with a <b>method</b> — the verb, like <code>GET</code> — and every response
+       starts with a three-digit <b>status code</b>. The method says what you want done; the code says
+       what happened. Both are a shared vocabulary, not labels you invent: browsers, caches, proxies and
+       client libraries all read them and change their own behaviour. Use them loosely and you get bugs
+       far from your code, like a cache storing something it should not.`,
+  terms:[
+    ["Method", "<code>GET</code> read · <code>POST</code> create · <code>PUT</code> replace the whole thing · <code>PATCH</code> change part · <code>DELETE</code> remove."],
+    ["Status code", "<b>2xx</b> worked · <b>3xx</b> look elsewhere · <b>4xx</b> the caller must change something · <b>5xx</b> the server failed, a retry may work."],
+    ["Safe", "Changes nothing: <code>GET</code>, <code>HEAD</code>, <code>OPTIONS</code>, <code>TRACE</code>. Anything may call these uninvited — a crawler, a browser prefetching a link — so a <code>GET</code> that deletes will eventually delete things nobody asked it to."],
+    ["Idempotent", "Doing it twice leaves the same state as doing it once. <code>PUT</code> and <code>DELETE</code> are; <code>POST</code> is not, because two POSTs make two orders. That is what the idempotency topic later in this stage is for."],
+    ["Retry-After", "A response header saying how many seconds to wait. Sent with <code>429</code> and <code>503</code> so a client backs off by a known amount instead of guessing."],
+  ],
+  code:[{label:"Express: choosing the code deliberately", lang:"js", code:`app.post('/orders', async (req, res) => {
   const errors = validate(req.body);
+  // 422, not 400: the JSON parsed fine, the values are just unacceptable.
   if (errors) return res.status(422).json({ code: 'VALIDATION_FAILED', errors });
 
   const order = await orders.create(req.body, req.user.id);
-  res.status(201).location(\`/orders/\${order.id}\`).json(order);   // 201 + Location
+  res.status(201).location(\`/orders/\${order.id}\`).json(order);   // 201 + where
 });
 
 app.get('/orders/:id', async (req, res) => {
   const order = await orders.find(req.params.id, req.user.id);
-  // 404 rather than 403: do not confirm someone else's order exists
+  // 404, not 403: a 403 would confirm someone else's order exists.
   if (!order) return res.status(404).json({ code: 'NOT_FOUND' });
   res.json(order);
 });
 
 app.put('/orders/:id/status', async (req, res, next) => {
-  try   { res.json(await orders.setStatus(req.params.id, req.body.status)); }
+  try { res.json(await orders.setStatus(req.params.id, req.body.status)); }
   catch (e) {
-    if (e.code === 'ALREADY_SHIPPED')                   // conflict with current state,
-      return res.status(409).json({ code: e.code });    // not bad input
+    // 409: the request is fine, the current state refuses it. Tells the
+    // client to re-read and decide, not to fix its input.
+    if (e.code === 'ALREADY_SHIPPED') return res.status(409).json({ code: e.code });
     next(e);
   }
 });`}],
-    points:[
-      `<b>Safe</b> (RFC 9110): GET, HEAD, OPTIONS, TRACE. A crawler may call these unasked, so never change state in one.`,
-      `<b>Idempotent</b>: PUT and DELETE plus the safe ones. POST is neither, which is why creation needs an idempotency key.`,
-      `<b>400 vs 422</b>: malformed versus parsed but unacceptable. <b>401 vs 403</b>: authenticating may help versus it will not.`,
-      `<b>429</b> is defined in RFC 6585, not 9110, and should carry <code>Retry-After</code>.`],
-    trap:`Returning 200 with an error in the body. Every client's error branch stops working and a
-          shared cache is entitled to store it.`,
-    build:`List every endpoint with its method and codes. Find the GET that changes something and the
-           200 that is really an error.`,
-    refs:[["RFC 9110","https://www.rfc-editor.org/rfc/rfc9110.html"],
-          ["RFC 6585","https://www.rfc-editor.org/rfc/rfc6585.html"]] },
+  points:[
+    `<b>400</b> malformed · <b>422</b> parsed but wrong · <b>401</b> not authenticated, logging in may help · <b>403</b> authenticated and still refused · <b>409</b> state refuses it · <b>429</b> too many requests.`,
+    `Pick the method from the semantics, not habit. For an action that maps to none of them — cancelling, refunding — <code>POST</code> to a URL naming the action is honest.`,
+    `Only retry what is idempotent. A proxy may repeat a <code>PUT</code> after a timeout; repeating a <code>POST</code> creates a second order.`],
+  trap:`Returning <code>200</code> with an error in the body. Clients check the status first, so every
+        error branch stops working — and a shared cache may store that &quot;success&quot; and serve it
+        to someone else.`,
+  build:`List your endpoints with their methods and codes, and look for two things: a <code>GET</code>
+         that changes something, and a <code>200</code> that is really an error.`,
+  refs:[["RFC 9110","https://www.rfc-editor.org/rfc/rfc9110.html"],
+        ["RFC 6585: 429","https://www.rfc-editor.org/rfc/rfc6585.html"]] },
 
   { id:"concurrency-models", name:"One thread, many requests", depth:"understand", core:false,
     why:`Node serves thousands of concurrent requests on one thread by never waiting. Anything that
@@ -3943,6 +3976,10 @@ function topicHTML(t) {
     </div>
     <p class="t-why">${t.why}</p>`;
 
+  if (t.terms && t.terms.length)
+    h += `<div class="terms"><h4>Key terms</h4><dl>` +
+      t.terms.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("") + `</dl></div>`;
+
   (t.code || []).forEach(() => { h += `<figure class="snip"><figcaption></figcaption><pre><code></code></pre></figure>`; });
   if (t.points && t.points.length) h += `<ul class="pts">${t.points.map((p) => `<li>${p}</li>`).join("")}</ul>`;
   if (t.trade) h += `<p class="band trade"><b>Trade-off.</b> ${t.trade}</p>`;
@@ -4133,6 +4170,26 @@ function highlight() {
     try { hljs.highlightElement(el); } catch (e) {}
   });
 }
+
+/* ---------------- glossary ---------------- */
+(function buildGlossary() {
+  const seen = new Map();
+  for (const t of allTopics)
+    for (const [term, def] of t.terms || [])
+      if (!seen.has(term.toLowerCase())) seen.set(term.toLowerCase(), { term, def, t });
+
+  const rows = [...seen.values()].sort((a, b) => a.term.localeCompare(b.term));
+  let html = `<div class="gloss"><p>Every term the route defines, with the topic that
+    introduces it. ${rows.length} entries.</p>`;
+  let letter = "";
+  for (const r of rows) {
+    const L = r.term[0].toUpperCase();
+    if (L !== letter) { if (letter) html += `</dl>`; letter = L; html += `<p class="letter">${L}</p><dl>`; }
+    html += `<dt>${r.term}</dt><dd>${r.def} <a href="#${r.t.id}">${r.t.name} →</a></dd>`;
+  }
+  stages.push({ num: stages.length + 1, id: "glossary", phase: 6, name: "Glossary",
+    lede: "Every term defined in one place.", custom: html + `</dl></div>` });
+})();
 
 buildSidebar();
 refreshProgress();
