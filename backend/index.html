@@ -1386,43 +1386,525 @@ select now() - pg_last_xact_replay_timestamp() as behind;`}],
   ] },
 
 { num:6, id:"testing", phase:2, name:"Testing and quality",
-  lede:"Not yet rewritten.",
+  lede:"Tests that catch real failures, run fast, and do not need re-running to be believed.",
   topics:[
-  { id:"test-levels", name:"What to test at which level", depth:"build", core:true,
-    why:`Not yet rewritten in the new format.` },
-  { id:"integration-tests", name:"Integration tests against real dependencies", depth:"build", core:true,
-    why:`Not yet rewritten in the new format.` },
-  { id:"test-doubles", name:"Test doubles, and what not to mock", depth:"build", core:true,
-    why:`Not yet rewritten in the new format.` },
-  { id:"flaky-tests", name:"Flaky tests and determinism", depth:"build", core:false,
-    why:`Not yet rewritten in the new format.` },
-  { id:"contract-testing", name:"Contract testing between services", depth:"understand", core:false,
-    why:`Not yet rewritten in the new format.` },
-  { id:"load-testing", name:"Load, stress and soak testing", depth:"understand", core:false,
-    why:`Not yet rewritten in the new format.` }
+
+  { id:"test-levels", name:"What to test where", depth:"build", core:true,
+    why:`The pyramid is a shape, not advice. The rule: test pure decisions where they are cheapest, and
+         test anything crossing a boundary against the real thing, because a mock will lie to you.`,
+    code:[{label:"The five tests per endpoint, every time", lang:"js", code:`describe('GET /orders/:id', () => {
+  it('returns the order to its owner',        async () => expect(200));
+
+  // The four nobody writes, and the four that fail in production:
+  it('rejects an unauthenticated request',    async () => expect(401));
+  it('hides another tenant\\'s order',         async () => expect(404)); // not 403
+  it('404s for an id that does not exist',    async () => expect(404));
+  it('rejects a malformed id',                async () => expect(400));
+});
+
+// Which level:
+//   pure decision, no I/O      -> unit, exhaustively
+//   SQL, migration, txn        -> integration, real database
+//   status code, auth, parsing -> boundary, real HTTP via supertest
+//   critical user journey      -> end to end, a handful only`}],
+    points:[
+      `A mocked repository returning a hand-built object proves you can build an object, not that the query works.`,
+      `Status codes break in middleware, serialization and routing, so they need a real request through the real app.`,
+      `Coverage counts lines executed, not assertions made. A test that calls everything and asserts nothing scores perfectly.`,
+      `The highest-value test most services lack is one that simply boots the app and makes a request.`],
+    trap:`400 unit tests, 92% coverage, and a release where every endpoint 500s because a config key was
+          renamed. No unit test touches startup.`,
+    build:`Write the five tests above for one endpoint. Then delete your config validation and run the
+           suite: if it still passes, you have no test that boots the app.`,
+    refs:[] },
+
+  { id:"integration-tests", name:"Testing against a real database", depth:"build", core:true,
+    why:`A mocked database cannot catch a wrong column name, a constraint violation, a bad migration or
+         invalid SQL — which is most of the bugs in data access code.`,
+    code:[{label:"Run against the real thing, and undo every test", lang:"js", code:`const { Client } = require('pg');
+let db;
+
+beforeAll(async () => {
+  db = new Client({ connectionString: process.env.TEST_DATABASE_URL });
+  await db.connect();
+  await applyMigrations(db);          // the REAL migrations, not a fixture
+});
+
+// Each test runs in a transaction that is always rolled back, so the
+// database is identical before and after, whatever the test did.
+beforeEach(() => db.query('begin'));
+afterEach(()  => db.query('rollback'));
+
+test('rejects a duplicate email', async () => {
+  await db.query("insert into users (email) values ('a@x.com')");
+  await expect(db.query("insert into users (email) values ('a@x.com')"))
+    .rejects.toThrow(/duplicate key/);
+});
+
+// rows before: 0  ->  2 tests pass  ->  rows after: 0`}],
+    points:[
+      `Same engine and major version as production. A different database is a different dialect and different plans.`,
+      `Build the schema by running your real migrations, so the migrations are tested on every run too.`,
+      `Rollback isolation needs no cleanup code, which is itself a thing that can be buggy.`,
+      `Keep mocking third-party APIs you do not control. Everything you deploy yourself should be real.`],
+    trade:`Rollback is fast and breaks if the code under test manages its own transactions. For code that
+           commits in stages, truncate between tests instead and accept the slower run.`,
+    trap:`Sharing one database between parallel tests without isolation. Passes alone, fails in CI,
+          passes on re-run — and the team learns to re-run rather than to trust it.`,
+    build:`Convert one mocked repository test to a real database with rollback. Then rename a column in a
+           migration but not in the query, and confirm it fails.`,
+    refs:[["Testcontainers","https://testcontainers.com/"]] },
+
+  { id:"test-doubles", name:"What not to mock", depth:"build", core:true,
+    why:`Double things at the edge: third-party APIs, the clock, randomness. Mocking your own classes
+         encodes today's design into the test, so every refactor breaks tests with no behaviour change.`,
+    code:[{label:"A fake that enforces the real contract", lang:"js", code:`class FakePaymentGateway {
+  charges = new Map();
+  nextResult = 'success';
+
+  async charge(amountCents, currency, idempotencyKey) {
+    if (this.charges.has(idempotencyKey))        // the real gateway does
+      return this.charges.get(idempotencyKey);   // this, so the fake must
+    if (this.nextResult === 'declined') throw new CardDeclined();
+    const charge = { id: 'ch_' + idempotencyKey, amountCents };
+    this.charges.set(idempotencyKey, charge);
+    return charge;
+  }
+}
+
+test('a client retry does not charge twice', async () => {
+  await checkout(order, { key: 'k1' });
+  await checkout(order, { key: 'k1' });
+  expect(gateway.charges.size).toBe(1);                    // state
+  expect((await order.reload()).status).toBe('paid');      // state
+  // not: expect(gateway.charge).toHaveBeenCalledTimes(1)  // structure
+});`}],
+    points:[
+      `Assert on the <b>result</b>, not the calls. State assertions survive refactoring; call assertions are the refactor's enemy.`,
+      `A <b>fake</b> costs more than a mock up front and pays it back every time the code changes.`,
+      `Mocks are genuinely right for one thing: proving something was <em>not</em> called, like not charging the card when validation failed.`,
+      `Build a thin interface per third party and fake that, so the fake is written once and read easily.`],
+    trap:`A fake more forgiving than the real dependency. If the real gateway rejects a reused
+          idempotency key and your fake happily returns a fresh charge, your tests prove the opposite of the truth.`,
+    build:`Find a test asserting a method was called, rewrite it to assert on state, then refactor the
+           implementation and check the new test still passes.`,
+    refs:[] },
+
+  { id:"flaky-tests", name:"Flaky tests", depth:"build", core:false,
+    why:`A suite people re-run is a suite nobody believes, and then a real failure gets re-run too.
+         Almost all flakiness is four causes, and none of their fixes is a retry.`,
+    code:[{label:"Found by running it: passes on the 15th, fails at month end", lang:"js", code:`function renew(from) {                 // code under test
+  const d = new Date(from);
+  d.setMonth(d.getMonth() + 1);
+  return d;
+}
+
+// The test builds its input from the wall clock, then asserts the day
+// of the month is unchanged after renewing:
+//   2026-01-15 -> 2026-02-15   pass
+//   2026-01-29 -> 2026-03-01   FAIL
+//   2026-01-30 -> 2026-03-02   FAIL
+//   2026-01-31 -> 2026-03-03   FAIL
+//   2026-03-31 -> 2026-05-01   FAIL
+//   2026-05-31 -> 2026-07-01   FAIL
+//   2026-08-31 -> 2026-10-01   FAIL
+// Six of seven dates fail, and the build is green on the 15th.
+
+// Deterministic: pin the clock and assert the real behaviour.
+const FIXED = new Date('2026-01-31T00:00:00Z');
+expect(renew(FIXED).toISOString().slice(0, 10)).toBe('2026-03-03');`}],
+    points:[
+      `<b>Wall clock</b>: inject it. Month ends, leap days and DST transitions are all real failure dates.`,
+      `<b>Randomness</b>: seed it and print the seed on failure.`,
+      `<b>Shared state</b>: isolate in setup. <b>Order dependence</b>: randomise order in CI so it fails loudly instead of lying dormant.`,
+      `Replace every <code>sleep</code> with waiting on the actual condition. CI machines are slower and more variable than laptops.`],
+    trade:`Automatic retries are a tourniquet for a suite that is already untrusted. Record every retry
+           so flakiness is a visible number, or the mechanism just hides it permanently.`,
+    trap:`Fixing flakiness by widening the timeout. It makes the suite slower and still intermittent, and
+          hides that the test is waiting on the wrong thing.`,
+    build:`Run your suite with randomised order and in parallel. Whatever newly fails had the dependency
+           all along.`,
+    refs:[] },
+
+  { id:"contract-testing", name:"Contract testing", depth:"understand", core:false,
+    why:`Real value across teams that deploy independently, and mostly overhead inside one. Say that
+         plainly before adopting it.`,
+    code:[{label:"What it catches that nothing else does", lang:"text", code:`The orders service drops customer_email because nothing in ITS
+codebase uses it. The notification service reads it.
+
+  orders tests        pass  (its own fixtures)
+  notification tests  pass  (its own mocks)
+  deploy              green
+  emails              silently stop, because the field is absent
+                      rather than an error
+
+Contract testing makes the consumer's real usage an artifact the
+provider verifies in its own build:
+
+  consumer tests  -> record the interactions actually used
+                  -> publish to a broker
+  provider build  -> replay every consumer's contract against a real
+                     instance, and FAIL before deploying
+
+The valuable outcome is the provider's build failing on a change that
+would break a consumer it has never heard of.`}],
+    points:[
+      `The contract is what a consumer <b>uses</b>, not the provider's whole schema. That smaller set is what makes it useful.`,
+      `Generate it from the consumer's own tests, so it cannot drift from the consumer's code.`,
+      `With one team deploying everything together, an integration test across both services gives most of the same protection with none of the infrastructure.`,
+      `A broker, versioning discipline and a build step on both sides is the real cost.`],
+    trap:`Writing the contract from the provider's schema. It then describes everything the provider
+          could return, so the provider can never change anything, which is the opposite of the intent.`,
+    build:`Write down the exact fields your code reads from one service you call. It is far fewer than
+           the response contains. That list is the contract.`,
+    refs:[["Pact","https://docs.pact.io/"]] },
+
+  { id:"load-testing", name:"Load, stress and soak", depth:"understand", core:false,
+    why:`Three different questions, not three intensities. Running one and claiming the others is how a
+         service passes its testing and falls over in week two.`,
+    code:[{label:"Read the curve, not a verdict", lang:"text", code:`Target: 300 req/s sustained, p99 under 400ms, errors under 0.1%
+
+rate    p50     p95      p99    errors   
+100     22ms    48ms     91ms   0.00%
+200     24ms    55ms    110ms   0.00%
+300     27ms    71ms    189ms   0.00%   <- target met
+400     41ms   180ms    620ms   0.00%   <- latency climbing, no errors
+500     95ms   710ms   2100ms   0.02%
+600    310ms  2400ms   6800ms   4.10%   <- collapse
+
+Real capacity is ~350, not 600. The service stops meeting its target
+long before it starts erroring, and only percentiles show that. The
+average at 500 req/s reads about 140ms and looks fine.
+
+(An illustration of the shape, not a measurement of any service.)`}],
+    points:[
+      `<b>Load</b>: does it meet its target at expected traffic. <b>Stress</b>: where does it break and does it degrade or collapse. <b>Soak</b>: does it leak over hours.`,
+      `A <b>closed</b> model keeps N virtual users each waiting for a response, so slowness reduces load and hides the problem. An <b>open</b> model sends at a fixed rate, like real traffic.`,
+      `Define the target as numbers before the test. "It should be fast" is not testable.`,
+      `A four-minute load test cannot find a leak that needs six hours. That is what soak is for.`],
+    trap:`Reporting the average. A service with p50 20ms and p99 4s has an average near 60ms and one in a
+          hundred users having a terrible time.`,
+    build:`Run an open-model test at rising rates until p99 breaches your target, and record the table.
+           Then hold half that rate for two hours and watch memory and descriptors.`,
+    refs:[] }
+
   ] },
 
 { num:7, id:"security", phase:3, name:"Auth, authorization and security",
-  lede:"Not yet rewritten.",
+  lede:"Who is calling, what they may do, and how not to trust anything they send.",
   topics:[
-  { id:"sessions-vs-tokens", name:"Sessions versus tokens, and cookie flags", depth:"build", core:true,
-    why:`Not yet rewritten in the new format.` },
-  { id:"passwords", name:"Passwords and credential handling", depth:"build", core:true,
-    why:`Not yet rewritten in the new format.` },
-  { id:"jwt", name:"Tokens in practice: JWT validation, expiry and revocation", depth:"build", core:true,
-    why:`Not yet rewritten in the new format.` },
-  { id:"oauth-oidc", name:"OAuth 2.1 and OpenID Connect", depth:"understand", core:false,
-    why:`Not yet rewritten in the new format.` },
-  { id:"authz-models", name:"Authorization models: roles, attributes, ownership and tenancy", depth:"build", core:true,
-    why:`Not yet rewritten in the new format.` },
-  { id:"service-auth", name:"Service-to-service authentication", depth:"understand", core:false,
-    why:`Not yet rewritten in the new format.` },
-  { id:"untrusted-input", name:"Untrusted input: injection, SSRF, traversal and deserialization", depth:"build", core:true,
-    why:`Not yet rewritten in the new format.` },
-  { id:"cors-headers", name:"CORS, security headers and browser-facing concerns", depth:"build", core:false,
-    why:`Not yet rewritten in the new format.` },
-  { id:"data-protection", name:"Data protection: encryption, key rotation, PII and logs", depth:"build", core:false,
-    why:`Not yet rewritten in the new format.` }
+
+  { id:"sessions-vs-tokens", name:"Sessions, tokens and cookie flags", depth:"build", core:true,
+    why:`For a first-party web app a server session is still the better default, because it can be
+         revoked instantly. Tokens became fashionable by association with single-page apps.`,
+    code:[{label:"Express: every flag set deliberately", lang:"js", code:`app.set('trust proxy', 1);                 // behind a TLS-terminating proxy
+
+app.use(session({
+  name: '__Host-session',                  // forces Secure, Path=/, no Domain
+  secret: config.sessionSecret,
+  store: new RedisStore({ client: redis }), // shared: survives a restart
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    httpOnly: true,       // JavaScript cannot read it — the whole point
+    secure:   true,       // HTTPS only
+    sameSite: 'lax',      // not sent on cross-site POSTs: most of CSRF gone
+    maxAge:   14 * 24 * 60 * 60 * 1000,
+  },
+}));
+
+// On login, rotate the id or you have session fixation:
+req.session.regenerate((err) => { req.session.userId = user.id; });`}],
+    points:[
+      `<b>Revocation</b> is the real difference. "Sign out everywhere" is one delete with sessions, and with stateless tokens it means waiting for expiry or building a denylist.`,
+      `<code>__Host-</code> forbids a <code>Domain</code> attribute, so no subdomain — including one you do not control — can set a cookie your app reads.`,
+      `<code>SameSite=Lax</code> removes most CSRF. Add a per-session token for state-changing requests if you need <code>SameSite=None</code>.`,
+      `The session lookup is a cache hit measured in a fraction of a millisecond, so the performance argument for tokens is smaller than people assume.`],
+    trap:`Storing a token in <code>localStorage</code> so the SPA can read it. Any XSS bug reads it too,
+          which <code>HttpOnly</code> makes impossible.`,
+    build:`Inspect your session cookie and check all four attributes. Try to read it from the console.
+           Then log in and compare the id before and after.`,
+    refs:[["OWASP: session management","https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html"]] },
+
+  { id:"passwords", name:"Storing credentials", depth:"build", core:true,
+    why:`You will be breached, or a backup will leak. The only question is whether the attacker gets a
+         usable credential list or a pile of expensive guesses.`,
+    code:[{label:"Argon2id, with no enumeration oracle", lang:"js", code:`const argon2 = require('argon2');
+const OPTS = { type: argon2.argon2id, memoryCost: 65536, timeCost: 3, parallelism: 4 };
+
+// Registration — salt and parameters are generated and encoded into
+// the stored string: $argon2id$v=19$m=65536,t=3,p=4$<salt>$<hash>
+const hash = await argon2.hash(password, OPTS);
+
+// Login
+const user = await users.findByEmail(email);
+if (!user) {
+  await argon2.verify(DUMMY_HASH, password);   // spend the same time
+  return genericFailure();                     // identical response
+}
+if (!await argon2.verify(user.passwordHash, password)) return genericFailure();
+
+if (argon2.needsRehash(user.passwordHash, OPTS))   // policy was raised
+  await users.setHash(user.id, await argon2.hash(password, OPTS));
+
+req.session.regenerate(...);`}],
+    points:[
+      `Argon2id first, bcrypt acceptable. A general-purpose hash like SHA-256 is not a password hash: a GPU tries billions a second.`,
+      `Tune to a few hundred milliseconds. Higher is better against an offline attacker and worse against an online one, so rate limit login too.`,
+      `Any difference between "no such account" and "wrong password" — body, status, <b>or timing</b> — tells an attacker which addresses are registered.`,
+      `Reset tokens are credentials: high entropy, single use, short lived, stored hashed, and they invalidate every session on use.`],
+    trap:`Returning a different message for an unknown email. Your login form becomes a tool for checking
+          which of a leaked address list has accounts with you.`,
+    build:`Time your login for a wrong password versus an unknown address. A measurable difference is a
+           timing oracle; fix it with the dummy verify.`,
+    refs:[["OWASP: password storage","https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html"],
+          ["RFC 9106: Argon2","https://www.rfc-editor.org/rfc/rfc9106.html"]] },
+
+  { id:"jwt", name:"Verifying a JWT properly", depth:"build", core:true,
+    why:`The famous warnings are about <code>alg:none</code>, and current libraries already stop those.
+         The live danger is accepting a perfectly valid token that was minted for someone else.`,
+    code:[{label:"All four cases run against jsonwebtoken 9.0.3", lang:"js", code:`// 1. decode() checks NOTHING. Signature here is garbage.
+jwt.decode(tamperedToken);
+// ACCEPTED -> { sub: '42', role: 'user', aud: 'orders-api', ... }
+
+// 2. alg:none, signature stripped — rejected either way.
+jwt.verify(noneToken, KEY);                            // rejected
+jwt.verify(noneToken, KEY, { algorithms: ['HS256'] }); // rejected
+
+// 3. Algorithm confusion: forge HS256 using the RSA PUBLIC key as the
+//    HMAC secret. Rejected — the library infers from the key type.
+jwt.verify(forged, publicKey);                         // rejected
+
+// 4. THE ONE THAT GETS THROUGH. Real token, correct signature, right
+//    issuer, not expired — but minted for a different service.
+jwt.verify(otherAudience, KEY, { algorithms: ['HS256'] });
+// ACCEPTED -> '42'
+
+jwt.verify(otherAudience, KEY, { algorithms: ['HS256'],
+  audience: 'orders-api', issuer: 'https://auth.example.com' });
+// rejected: jwt audience invalid. expected: orders-api`}],
+    points:[
+      `Call <code>verify</code>, never <code>decode</code>, and pass <b>every</b> option: algorithms, issuer, audience.`,
+      `<code>exp</code> is enforced by default by good libraries. Allow a few seconds of clock tolerance.`,
+      `A stateless token cannot be withdrawn. The three real answers are short expiry, a revocation denylist, or reference tokens.`,
+      `Rotate refresh tokens on every use and revoke the whole family if an already-used one reappears, because that means one was stolen.`],
+    trade:`A denylist restores revocation and reintroduces the per-request lookup tokens existed to
+           avoid. At that point compare it honestly against a server session.`,
+    trap:`Baking authorization into the token and never re-checking. A role issued an hour ago is an
+          hour-old opinion, so a revoked administrator stays one until expiry.`,
+    build:`Mint a token with the right signature and a <b>different audience</b>, and send it to your
+           API. If it is accepted, you have just reproduced case 4 against your own service.`,
+    refs:[["RFC 8725: JWT BCP","https://www.rfc-editor.org/rfc/rfc8725.html"]] },
+
+  { id:"oauth-oidc", name:"OAuth 2.1 and OIDC", depth:"understand", core:false,
+    why:`OAuth is delegated <em>authorization</em>: the token says what the holder may do. OIDC adds the
+         identity layer that says who they are. Using one as the other is a standard review finding.`,
+    code:[{label:"What the OAuth 2.1 draft actually says", lang:"text", code:`PKCE
+  "Clients MUST use code_challenge and code_verifier and authorization
+   servers MUST enforce their use except under the conditions described
+   in Section 7.5.1."
+  "An AS MUST reject requests without a code_challenge from public
+   clients, and MUST reject such requests from other clients unless
+   there is reasonable assurance that the client mitigates
+   authorization code injection in other ways."
+
+Removed
+  "The Implicit grant (response_type=token) is omitted"
+  "The Resource Owner Password Credentials grant is omitted"
+
+Redirect URIs
+  "MUST reject authorization requests that specify a redirect URI that
+   doesn't exactly match one that was registered" (loopback excepted)
+
+Tokens in URLs
+  "clients MUST NOT send the access token in a URI query parameter,
+   and resource servers MUST ignore access tokens in a URI query
+   parameter."
+
+Quoted from draft-ietf-oauth-v2-1-13. Still an Internet-Draft, so
+check the current revision before citing it.`}],
+    points:[
+      `Authorization code flow with PKCE, via a library. The failure modes are subtle and the consequence is account takeover.`,
+      `Request the narrowest scopes that do the job. A token that can do everything is a password with a shorter life.`,
+      `Validate <code>state</code> on the way back, and register the exact redirect URI.`,
+      `Delegating sign-in removes password storage and MFA from your codebase, and makes their outage your outage.`],
+    trade:`Rarely right: building OAuth to log users into your own first-party app. A session cookie does
+           that job with a fraction of the moving parts.`,
+    trap:`Using the ID token as an access token, or the access token as proof of identity. The first is
+          for your client, the second for the resource server.`,
+    build:`Read your provider's <code>/.well-known/openid-configuration</code>, then trace one login in
+           dev tools and find the <code>code_challenge</code> going out and <code>state</code> coming back.`,
+    refs:[["OAuth 2.1 draft","https://datatracker.ietf.org/doc/html/draft-ietf-oauth-v2-1-13"],
+          ["OpenID Connect Core","https://openid.net/specs/openid-connect-core-1_0.html"]] },
+
+  { id:"authz-models", name:"Authorizing every object", depth:"build", core:true,
+    why:`Authentication happens once and a framework does it. Authorization happens on every object and
+         is hand-written, which is why the commonest serious API vulnerability is a missing ownership check.`,
+    code:[{label:"Make the safe path the only path", lang:"js", code:`// Wrong: authenticated, but whose order? Nobody asked.
+app.get('/orders/:id', requireAuth, async (req, res) => {
+  res.json(await Order.findByPk(req.params.id));   // every user, every order
+});
+
+// Better: the check is explicit, and 404 so the response does not
+// confirm that someone else's order exists.
+const order = await Order.findByPk(req.params.id);
+if (!order || order.tenantId !== req.user.tenantId) return res.sendStatus(404);
+
+// Best: the scope is structural. The repository is built with the
+// tenant, so a query that forgets it cannot be written.
+function repoFor(tenantId) {
+  return {
+    findOrder: (id) => db.query(
+      'select * from orders where id = $1 and tenant_id = $2', [id, tenantId]),
+  };
+}
+app.use((req, res, next) => { req.repo = repoFor(req.user.tenantId); next(); });`},
+           {label:"Or below every code path, in the database", lang:"sql", code:`alter table orders enable row level security;
+create policy tenant_isolation on orders
+  using (tenant_id = current_setting('app.tenant_id')::bigint);`}],
+    points:[
+      `<b>Deny by default.</b> If forgetting a check leaves an endpoint open, some endpoint will be open.`,
+      `<b>Roles</b> stop fitting the moment a rule mentions the object: "a manager can approve expenses, but not their own".`,
+      `Tenant must constrain <b>every</b> query, not the ones you remembered.`,
+      `Hiding a button is a usability decision, not a security control. The endpoint is still reachable with curl.`],
+    trap:`<code>GET /orders/8841</code> that checks the caller is signed in, loads the order and returns
+          it. Every authenticated user can now read every order by changing the number.`,
+    build:`As user A, request every id-taking endpoint using user B's ids. Every 200 is a vulnerability.
+           Then move tenancy into the repository and re-run.`,
+    refs:[["OWASP API Top 10: BOLA","https://owasp.org/API-Security/editions/2023/en/0xa1-broken-object-level-authorization/"]] },
+
+  { id:"service-auth", name:"Service-to-service auth", depth:"understand", core:false,
+    why:`"It came from inside the network" is not an identity. That assumption fails the moment anything
+         inside is compromised, which is the normal shape of a serious breach.`,
+    code:[{label:"Two identities, not one", lang:"text", code:`Compromised reporting tool, network trust:
+  reporting -> payments.charge()      allowed, because internal
+
+Compromised reporting tool, scoped credentials:
+  reporting holds scope "orders:read"
+  reporting -> payments.charge()      rejected
+  blast radius stops there
+
+Carry BOTH identities on a call:
+  the calling service   -> mTLS cert, or a client-credentials token
+  the end user          -> a separate signed token, propagated
+
+Collapsing them means the downstream service cannot apply user-level
+authorization, and everything ends up running as an omnipotent
+principal.`}],
+    points:[
+      `<b>mTLS</b> puts identity in the transport. Strong, and it needs certificate issuance and rotation — usually a service mesh.`,
+      `<b>Client credentials</b> reuse the OAuth machinery you may already run, and put the authorization server on the call path.`,
+      `Short-lived credentials mean a leaked one expires. Workload identity means there is no static secret at all.`,
+      `Each service gets only the scopes it needs. That narrowness is the entire value.`],
+    trap:`One shared API key used by every service. It cannot be rotated without coordinating every
+          deployment, and when it leaks you cannot tell which service leaked it.`,
+    build:`List your internal calls and ask what stops an attacker with a foothold in one service from
+           making each. Put a scoped credential in front of the most sensitive one.`,
+    refs:[["RFC 8705: mTLS client auth","https://www.rfc-editor.org/rfc/rfc8705.html"]] },
+
+  { id:"untrusted-input", name:"Untrusted input, four ways", depth:"build", core:true,
+    why:`Injection, SSRF, path traversal and unsafe deserialization look like four vulnerabilities. They
+         are one mistake in four places: a caller's value concatenated into something that gets interpreted.`,
+    code:[{label:"The same fix shape each time", lang:"js", code:`// SQL injection
+db.query("select * from users where email = '" + email + "'");   // wrong
+db.query('select * from users where email = $1', [email]);       // right
+
+// Dynamic identifier: cannot be a parameter, so use an allowlist.
+const SORTABLE = { date: 'created_at', total: 'total_cents' };
+const col = SORTABLE[req.query.sort];
+if (!col) return res.sendStatus(400);
+db.query(\`select * from orders order by \${col} desc\`);   // safe: ours
+
+// Path traversal
+const full = path.resolve(BASE, req.params.file);
+if (!full.startsWith(path.resolve(BASE) + path.sep)) return res.sendStatus(400);
+
+// SSRF: allowlist the destination, and re-check after EVERY redirect
+const { hostname } = new URL(url);
+if (!ALLOWED.has(hostname)) return res.sendStatus(400);
+await fetch(url, { redirect: 'manual' });   // validate each hop yourself
+
+// Deserialization: JSON only. Never a format that builds objects from
+// untrusted bytes.`}],
+    points:[
+      `Parameterizing is not escaping. The value is sent separately from the statement, so it can never be parsed as SQL whatever it contains.`,
+      `SSRF is dangerous because your server sits <b>inside</b> the network, where metadata endpoints have no authentication.`,
+      `Blocklists fail against redirects, DNS names resolving to private addresses, and encodings. An allowlist is the only robust defence.`,
+      `An allowlist will block something legitimate one day. Where being wrong means a breach, take the support ticket.`],
+    trap:`Escaping instead of parameterizing. Escaping depends on getting every context right, in a
+          helper someone will later reuse in a different context.`,
+    build:`Grep for string concatenation near select/insert/update/delete and for file paths built from
+           request values. Then check whether anything fetches a caller-supplied URL.`,
+    refs:[["OWASP Top 10","https://owasp.org/www-project-top-ten/"],
+          ["OWASP: SSRF prevention","https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html"]] },
+
+  { id:"cors-headers", name:"CORS and security headers", depth:"build", core:false,
+    why:`CORS is a browser rule about who may <em>read</em> a response. It is not authorization, it does
+         not protect your API, and curl ignores it entirely.`,
+    code:[{label:"Express: an allowlist, not a reflection", lang:"js", code:`const ALLOWED = new Set(['https://app.example.com', 'https://admin.example.com']);
+
+app.use(cors({
+  origin: (origin, cb) =>
+    cb(null, !origin || ALLOWED.has(origin)),   // NEVER reflect blindly
+  credentials: true,          // cannot be combined with origin '*'
+  maxAge: 86400,              // stop the browser asking on every call
+}));
+app.use((req, res, next) => { res.vary('Origin'); next(); });
+
+app.use(helmet({
+  strictTransportSecurity: { maxAge: 31536000, includeSubDomains: true },
+  contentSecurityPolicy: {    // start in report-only, read, then enforce
+    directives: { defaultSrc: ["'self'"], objectSrc: ["'none'"],
+                  frameAncestors: ["'none'"], baseUri: ["'self'"] },
+  },
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+}));                          // helmet sets X-Content-Type-Options too`}],
+    points:[
+      `<code>Vary: Origin</code> matters: without it a shared cache can serve one origin's response to another.`,
+      `<b>CSP</b> is the strongest anti-XSS control available and the most disruptive to adopt. Report-only first, for long enough to see real traffic.`,
+      `<code>nosniff</code> stops the browser second-guessing your <code>Content-Type</code>, which is how an uploaded "image" becomes script.`,
+      `A wildcard origin plus credentials is refused by browsers, which is why people reach for reflection.`],
+    trap:`Reflecting the <code>Origin</code> header back to make CORS work everywhere. That allows every
+          origin including an attacker's page, which with credentials can then read authenticated responses.`,
+    build:`Send an <code>Origin</code> of <code>https://evil.example</code> to your API. If it is echoed,
+           you have the reflection bug. Then add CSP in report-only and read a day of reports.`,
+    refs:[["MDN: CORS","https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CORS"],
+          ["MDN: CSP","https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CSP"]] },
+
+  { id:"data-protection", name:"Encryption, PII and logs", depth:"build", core:false,
+    why:`Encryption at rest defends a stolen disk and almost nothing else. What reduces breach damage is
+         holding less data and keeping secrets out of the systems that copy data everywhere.`,
+    code:[{label:"Redaction in the logger, not in the discipline", lang:"js", code:`const REDACT = new Set(['password','token','authorization','cookie',
+  'card_number','cvv','secret','api_key','refresh_token','id_token']);
+
+function scrub(value, key) {
+  if (key && REDACT.has(key.toLowerCase())) return '[redacted]';
+  if (Array.isArray(value)) return value.map((v) => scrub(v));
+  if (value && typeof value === 'object')
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, scrub(v, k)]));
+  return value;
+}
+
+// pino does this natively, which is better than remembering to call scrub:
+const logger = require('pino')({
+  redact: { paths: ['req.headers.authorization', 'req.headers.cookie',
+                    '*.password', '*.token'], censor: '[redacted]' },
+});
+
+// And the test that proves it:
+// post a known password to /login, assert it appears in NO log line.`}],
+    points:[
+      `Encryption at rest is invisible to anyone using the application, which is most attackers who matter.`,
+      `<b>Minimisation</b> is the cheapest protection. Data you never collected cannot leak.`,
+      `Field-level encryption meaningfully limits a database compromise and costs you querying, indexing and sorting on those fields. Decide per field, and write down why.`,
+      `A convention people must remember will be forgotten during an incident, which is when the most logging gets added.`],
+    trap:`A debugging change that logs the full request body on the auth endpoint. Every password typed
+          goes into your log aggregator in plain text, with a long retention, while the database was
+          encrypted the whole time and it made no difference.`,
+    build:`Grep a day of logs for password, token, authorization and secret. Then add redaction and write
+           the test that posts a known password and asserts it appears nowhere.`,
+    refs:[["OWASP: logging","https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html"]] }
+
   ] },
 
 { num:8, id:"caching", phase:3, name:"Caching and performance",
