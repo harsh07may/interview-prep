@@ -213,24 +213,27 @@ for f in aspnet-core react-typescript backend; do
   rm -f /tmp/chk*.js
 done && echo "script ok"
 
-# 2b. Every backend topic has its required fields, and no stub or over-wide snippets
+# 2b. Every backend topic has its required fields, and no over-wide snippets
 node -e '
 const fs=require("fs"), s=fs.readFileSync("backend/index.html","utf8");
 const m=s.match(/<script>([\s\S]*?)<\/script>/)[1];
 const lit=m.slice(m.indexOf("const stages"), m.indexOf("const DEPTH"));
 const stages=new Function(lit+"; return stages;")();
-let n=0, bad=[];
-for (const st of stages) for (const t of st.topics||[]) { n++;
-  for (const f of ["id","name","depth","line","what","use","concepts","how"])
-    if (!t[f]) bad.push(t.id+": missing "+f);
-  if (!["understand","build"].includes(t.depth)) bad.push(t.id+": bad depth");
-  if (!t.concepts || t.concepts.length < 3) bad.push(t.id+": needs 3+ concepts");
-  for (const c of t.code||[]) {
-    if (!c.code || c.code.trim().length < 20) bad.push(t.id+": stub snippet");
-    if (c.code.split("\n").some(l => l.length > 92)) bad.push(t.id+": snippet line over 92 chars");
+let n=0, todo=0, bad=[];
+for (const st of stages) {
+  if (!st.lede) bad.push("stage "+st.id+": missing lede");
+  for (const t of st.topics||[]) { n++;
+    if (/Not yet rewritten/.test(t.why||"")) { todo++; continue; }
+    for (const f of ["id","name","depth","why"]) if (!t[f]) bad.push(t.id+": missing "+f);
+    if (!["understand","build"].includes(t.depth)) bad.push(t.id+": bad depth");
+    if (!t.points || t.points.length < 3) bad.push(t.id+": needs 3+ points");
+    for (const c of t.code||[]) {
+      if (!c.code || c.code.trim().length < 20) bad.push(t.id+": stub snippet");
+      if (c.code.split("\n").some(l => l.length > 88)) bad.push(t.id+": snippet line over 88 chars");
+    }
   }
 }
-console.log("topics:", n);
+console.log("topics:", n, " still to rewrite:", todo);
 if (bad.length) { console.error(bad.join("\n")); process.exit(1); }
 console.log("fields ok");'
 
