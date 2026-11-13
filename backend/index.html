@@ -1908,43 +1908,526 @@ const logger = require('pino')({
   ] },
 
 { num:8, id:"caching", phase:3, name:"Caching and performance",
-  lede:"Not yet rewritten.",
+  lede:"Making it fast, and knowing which number to look at before you try.",
   topics:[
-  { id:"cache-layers", name:"Cache layers and the CDN", depth:"understand", core:true,
-    why:`Not yet rewritten in the new format.` },
-  { id:"cache-strategies", name:"Strategies: cache-aside, write-through and write-behind", depth:"build", core:true,
-    why:`Not yet rewritten in the new format.` },
+
+  { id:"cache-layers", name:"Which layer, and how stale", depth:"understand", core:true,
+    why:`Five places a response can be held, each cheaper and staler than the last. Choosing the layer
+         is most of the decision.`,
+    code:[{label:"One product page, four different answers", lang:"text", code:`browser       free, closest, UNCONTROLLABLE once sent. You cannot
+              invalidate it, only wait. Short max-age + revalidation.
+
+CDN           huge leverage for static assets and public responses,
+              and it can serve a cached copy while your origin is down.
+
+reverse proxy shared cache at your edge, for public responses that are
+              expensive to produce and identical for everyone.
+
+in-process    fastest possible, and PER INSTANCE: ten instances means
+              ten caches, invalidation reaches one, and two users can
+              see different answers at the same moment.
+
+distributed   Redis. One cached truth, one network hop, one more
+              dependency that can fail.
+
+  product image   -> CDN, long TTL, versioned URL
+  rendered HTML   -> shared cache, 60s
+  product record  -> distributed, 5min
+  the user basket -> NOT CACHED, and marked private`}],
+    points:[
+      `Anything identical for everyone and rarely changing goes on the CDN with a versioned URL, so a change is a new URL rather than an invalidation.`,
+      `Use in-process only for genuinely immutable data, or where instances disagreeing is harmless.`,
+      `Mark everything else explicitly uncacheable. The dangerous case is a per-user response stored by a shared cache.`,
+      `Your measured hit rate on an in-process cache is optimistic by roughly the instance count.`],
+    trap:`A shared cache storing an authenticated response. The next person asking for that URL gets the
+          previous user's data — a breach caused by a caching header.`,
+    build:`List every piece of data on one page with the layer it belongs in and its acceptable
+           staleness in seconds. Compare against what your service does today.`,
+    refs:[] },
+
+  { id:"cache-strategies", name:"Cache-aside, and the two others", depth:"build", core:true,
+    why:`They get listed as peers. They are not: cache-aside is what almost everyone should use almost
+         always, and write-behind is here so you can recognise it being proposed.`,
+    code:[{label:"Written so the cache is allowed to fail", lang:"js", code:`async function getOrder(id) {
+  const key = \`order:v2:\${id}\`;
+
+  try {
+    const hit = await redis.get(key);
+    if (hit) return JSON.parse(hit);
+  } catch (e) {
+    metrics.increment('cache.error');      // degrade, do not fail
+  }
+
+  const order = await db.findOrder(id);    // the source of truth
+  if (order) {
+    try { await redis.set(key, JSON.stringify(order), 'EX', 300); }
+    catch (e) { /* still return the answer */ }
+  }
+  return order;
+}
+
+async function updateOrder(id, changes) {
+  const order = await db.updateOrder(id, changes);   // DATABASE FIRST
+  try { await redis.del(\`order:v2:\${id}\`); }          // then invalidate
+  catch (e) { /* the TTL is the backstop for exactly this */ }
+  return order;
+}`}],
+    points:[
+      `The property that matters is <b>failure behaviour</b>: with cache-aside a cache outage is a slowdown; with write-behind it is data loss.`,
+      `<b>Delete</b> on write, do not update. Two concurrent writers can write to the cache in the opposite order from the database, leaving it permanently wrong until the TTL.`,
+      `Database first, then invalidate. Invalidate first and a concurrent reader repopulates the old value in the gap.`,
+      `Write-behind acknowledges writes that are not durable, which is almost never acceptable for an application database.`],
+    trap:`Wrapping cache calls so an error propagates. The cache has stopped being an optimisation and
+          become a dependency that can take your service down.`,
+    build:`Add cache-aside to one read-heavy endpoint, then kill the cache and confirm it still serves
+           correct results, slower. If it errors, that is the bug.`,
+    refs:[] },
+
   { id:"cache-keys", name:"Keys, TTLs and invalidation", depth:"build", core:false,
-    why:`Not yet rewritten in the new format.` },
+    why:`The famous joke is about this: a value derived from several inputs, and when any input changes
+         you must know which keys became wrong. Usually you do not.`,
+    code:[{label:"Version in the key is the cheapest mass invalidation", lang:"text", code:`order:v2:8841                 one record
+user:v1:42:permissions        a derived set
+pricing:v3:IN:2026-11         slow-changing, by region and month
+
+A deploy changes the cached shape:
+    order:v2:*  ->  order:v3:*        one constant, changed in the
+                                      same commit as the shape
+
+Every v2 entry is instantly unreachable and expires on its own. No
+flush, no mass delete, and no window where new code reads an old
+structure.
+
+TTL by how wrong you can afford to be:
+    pricing table      1 hour     changes rarely, staleness visible
+    order record       5 min      invalidated on write; TTL is backup
+    permissions       30 sec      security-relevant, keep it short
+    negative result   10 sec      stop a missing id hammering the DB`}],
+    points:[
+      `The <b>TTL is the correctness guarantee</b>: it is what makes a missed invalidation self-heal.`,
+      `Anything derived from several inputs cannot be invalidated precisely without tracking dependencies. Use a short TTL instead.`,
+      `Cache negative results briefly too, or a missing id becomes a database amplifier.`,
+      `Ask what one minute of staleness actually costs the business. The answer is usually nothing.`],
+    trap:`No TTL because you invalidate explicitly. Every invalidation path misses a case — a batch job,
+          a manual fix, a code path added later — and without a TTL that wrong value is permanent.`,
+    build:`Check every key has a version segment and a TTL. Pick a derived value and try to enumerate
+           every input that could make it wrong; if the list is over two, use a short TTL and delete the code.`,
+    refs:[] },
+
   { id:"stampedes", name:"Stampedes and hot keys", depth:"build", core:false,
-    why:`Not yet rewritten in the new format.` },
-  { id:"http-caching", name:"HTTP caching and ETags", depth:"build", core:true,
-    why:`Not yet rewritten in the new format.` },
+    why:`A key serving a thousand requests a second expires. Every request in flight misses at the same
+         instant, and the database gets a thousand copies of a query it was answering once every five minutes.`,
+    code:[{label:"Measured: 200 concurrent misses on one key", lang:"js", code:`// Naive cache-aside: every concurrent miss loads independently.
+//   -> 200 database calls
+
+// Single-flight: the first miss creates the promise, the rest await it.
+const inflight = new Map();
+
+async function getHot(key) {
+  const hit = await redis.get(key);
+  if (hit) return JSON.parse(hit);
+  if (inflight.has(key)) return inflight.get(key);     // join the first
+
+  const p = loadFromDb(key)
+    .then(async (v) => {
+      const ttl = 300 + Math.floor(Math.random() * 60);  // jitter: do not
+      await redis.set(key, JSON.stringify(v), 'EX', ttl); // expire together
+      return v;
+    })
+    .finally(() => inflight.delete(key));
+
+  inflight.set(key, p);
+  return p;
+}
+//   -> 1 database call
+
+// Per instance. Ten instances give ten calls, not one, which is fine.`}],
+    points:[
+      `Single-flight is a few lines and bounds the damage to one query per instance. A distributed lock to make it exactly one is rarely worth the complexity.`,
+      `<b>Jitter</b> is nearly free and essential after a deploy or a cache flush, when keys written together would otherwise expire together.`,
+      `<b>Early refresh</b> — recompute in the background before expiry while still serving the old value — means nobody ever waits. Worth it for the few keys that are both hot and expensive.`,
+      `A hot key saturates one cache node, and sharding does not help because it hashes to one place.`],
+    trap:`Warming the whole cache at startup with one TTL. You have built a scheduled stampede across
+          your entire key space.`,
+    build:`Delete a hot key, fire a few hundred concurrent requests, and count the database queries. Add
+           single-flight and count again.`,
+    refs:[] },
+
+  { id:"http-caching", name:"ETags and conditional requests", depth:"build", core:true,
+    why:`HTTP has a caching system built in and most APIs ignore it. Used properly the client holds the
+         response and your server answers "unchanged" in a few bytes.`,
+    code:[{label:"A real exchange: 304 carries a zero-byte body", lang:"js", code:`app.get('/orders/:id', async (req, res) => {
+  const order = await orders.find(req.params.id, req.user.id);
+  if (!order) return res.sendStatus(404);
+
+  // Cheap validator: a row version, not a hash of the serialized body,
+  // so we can answer 304 BEFORE doing the expensive work.
+  const etag = \`W/"\${order.id}-\${order.version}"\`;
+  res.set('ETag', etag);
+  res.set('Cache-Control', 'private, max-age=0, must-revalidate');
+  if (req.get('If-None-Match') === etag) return res.status(304).end();
+
+  res.json(toApi(order));
+});
+
+// first request          200  "W/..."  24 bytes
+// revalidate, unchanged  304  "W/..."   0 bytes
+// revalidate, changed    200  "W/..."  27 bytes`}],
+    points:[
+      `<b><code>private</code> vs <code>public</code></b> is the most consequential flag. <code>public</code> lets a shared cache store a user-specific response.`,
+      `<code>Vary</code> names the request headers that change the response, or a shared cache serves one variant to everyone.`,
+      `An ETag from the serialized body saves bandwidth only — you had to build the response to hash it. One from a row version saves the work too.`,
+      `On a list endpoint returning tens of kilobytes, a 304 is the whole payload saved on every unchanged poll.`],
+    trap:`Marking a user-specific response <code>public</code>. A CDN or corporate proxy stores one
+          user's data and serves it to the next person who asks for that URL.`,
+    build:`Add an ETag to one read endpoint and confirm with curl that <code>If-None-Match</code> returns
+           304 with an empty body. Then audit every endpoint for <code>Cache-Control</code>.`,
+    refs:[["RFC 9111: HTTP Caching","https://www.rfc-editor.org/rfc/rfc9111.html"]] },
+
   { id:"redis", name:"Redis beyond caching", depth:"build", core:false,
-    why:`Not yet rewritten in the new format.` },
-  { id:"bottleneck", name:"Finding the bottleneck: profiling and percentiles", depth:"build", core:false,
-    why:`Not yet rewritten in the new format.` },
-  { id:"memory-gc", name:"Memory, GC and leaks", depth:"understand", core:false,
-    why:`Not yet rewritten in the new format.` },
+    why:`It is a set of data structures over the network with atomic operations. Knowing which structure
+         fits turns several awkward database designs into one command.`,
+    code:[{label:"Run against Redis 7: each type doing its job", lang:"bash", code:`SET session:42 "opaque" EX 900      # expires on its own
+TTL session:42
+# 900
+
+INCR views:page:7                   # atomic, no read-modify-write
+# 1
+
+HSET cart:42 sku-a 2 sku-b 1        # fields updatable one at a time
+HGETALL cart:42
+# sku-a 2 sku-b 1
+
+SADD online u1 u2 u1                # the duplicate is a no-op
+SCARD online
+# 2
+
+ZADD top 10 alice 30 bob 20 carol   # a leaderboard
+ZREVRANGE top 0 1 WITHSCORES
+# bob 30 carol 20
+
+SET lock:job owner1 NX EX 30        # acquire: OK
+SET lock:job owner2 NX EX 30        # second attempt: nil, already held`}],
+    points:[
+      `<b>Sorted sets</b> answer "top ten" and "this player's rank" as single commands — a sort over a large table in SQL, or a denormalized rank with a consistency problem.`,
+      `Command execution is <b>single-threaded</b>, which is what makes operations atomic and means one slow command blocks every client.`,
+      `Set a TTL on nearly everything. Memory is the capacity limit, and a key space that only grows will hit <code>maxmemory</code> and evict things you needed.`,
+      `Use Lua when a sequence must be atomic as a whole, as the rate limiter does.`],
+    trade:`Treat Redis as a cache that can be lost, not a database. If you need durability, be explicit
+           about the persistence mode and test what a restart actually loses.`,
+    trap:`<code>KEYS</code> in production. It walks the entire key space on the one thread serving
+          everything else, so on a large instance it is an outage. <code>SCAN</code> does the same job in pieces.`,
+    build:`Take something stored as a serialized blob and model it with the right structure. Measure the
+           bytes for a single-field update before and after.`,
+    refs:[["Redis: data types","https://redis.io/docs/latest/develop/data-types/"]] },
+
+  { id:"bottleneck", name:"Finding the bottleneck", depth:"build", core:false,
+    why:`Performance work without measurement is guessing, and the guess is usually wrong, because the
+         slow part is rarely the complicated part.`,
+    code:[{label:"Break the request into four numbers that add up", lang:"js", code:`// Time every boundary, not just the whole request.
+async function handler(req, res) {
+  const t = req.timings = {};
+  t.db    = await timed(() => orders.find(req.params.id));
+  t.cache = await timed(() => cache.get(key));
+  t.http  = await timed(() => payments.status(id));
+  // whatever is left is your own code
+  req.log.info({ ...t, total: Date.now() - req.startedAt }, 'breakdown');
+}
+
+// Export latency as a HISTOGRAM, never a gauge of the mean:
+const h = new promClient.Histogram({
+  name: 'http_request_duration_seconds',
+  labelNames: ['method', 'route', 'status'],   // route TEMPLATE, not path
+  buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5],
+});`}],
+    points:[
+      `Work <b>top down</b>: percentiles per endpoint, then a breakdown by component, then profile whichever dominates.`,
+      `A CPU profile is silent about blocking. If a request takes 400ms and uses 8ms of CPU, it is the wrong tool.`,
+      `<b>Query count per request</b> catches N+1 faster than any profiler, and you can assert on it in a test.`,
+      `A profile against a thousand rows tells you nothing about a million: plans change and the bottleneck moves.`],
+    trap:`A sprint optimising a pricing algorithm that turns out to be 4% of the request, while an N+1
+          behind an ORM relation is the other 96%.`,
+    build:`Take your slowest endpoint by p99 and split its latency into database, cache, outbound and
+           your own code. Four numbers that add to the total. Only the biggest is worth working on.`,
+    refs:[] },
+
+  { id:"memory-gc", name:"Memory and leaks", depth:"understand", core:false,
+    why:`A script can leak and exit. A server runs for weeks, so anything unbounded eventually fills
+         memory and the kernel kills it with no stack trace.`,
+    code:[{label:"Measured: the commonest leak in a long-running service", lang:"js", code:`// A cache with no bound. Correct, fast, never gives anything back.
+const cache = new Map();
+function handle(i) {
+  cache.set(\`user:\${i}\`, { id: i, profile: 'x'.repeat(1024) });
+}
+// heap at start:        3.5 MB
+// after 200k requests: 73.7 MB   entries: 200000
+
+// Bounded: evict the oldest at the limit. Entry count is then constant
+// no matter how many requests pass through.
+const LIMIT = 10_000;
+function handleBounded(i) {
+  if (cache.size >= LIMIT) cache.delete(cache.keys().next().value);
+  cache.set(\`user:\${i}\`, { id: i, profile: 'x'.repeat(1024) });
+}
+// In production use lru-cache with maxSize and ttl rather than this.`}],
+    points:[
+      `A leak in a managed runtime is memory still <b>reachable</b> that should not be. Something is holding a reference.`,
+      `Four shapes: an unbounded cache or map, a closure capturing more than it needs, a listener never removed, a collection appended to per request.`,
+      `Judge from the <b>floor</b> of the sawtooth over hours. A short window always looks alarming or always looks fine.`,
+      `Flat heap with rising RSS is usually fragmentation or native allocations.`],
+    trap:`A service restarted every few hours with exit 137 and nothing in the logs. The process was
+          OOMKilled and never got to write one.`,
+    build:`Run under steady load for an hour and plot heap and RSS. If the floor rises, take two heap
+           snapshots an hour apart and compare retained sizes.`,
+    refs:[] },
+
   { id:"tail-latency", name:"Why p99 goes bad before CPU does", depth:"understand", core:false,
-    why:`Not yet rewritten in the new format.` }
+    why:`Teams add capacity near 100% and are surprised latency was already terrible at 80%. Queueing
+         does not rise linearly with utilisation; it explodes.`,
+    code:[{label:"Service time 20ms. The work per request never changes.", lang:"text", code:`util   mean wait   total latency
+50%      20ms         40ms
+70%      47ms         67ms
+80%      80ms        100ms
+90%     180ms        200ms
+95%     380ms        400ms
+98%     980ms       1000ms
+
+From 50% to 98% utilisation, latency grows 25 times and the work per
+request is identical. An alert at 95% CPU fires long after users
+noticed.
+
+(M/M/1 model, so this is the SHAPE, not a prediction. Real systems are
+worse, because arrivals are burstier than the model assumes.)
+
+Tail amplification: a page making 10 calls each with a p99 of 200ms
+has roughly a 1-in-10 chance of containing a slow one.`}],
+    points:[
+      `Applies to CPU, a thread pool, a connection pool and an event loop alike.`,
+      `<b>Little's law</b> for sizing: 200 requests a second at 20ms each needs about 4 concurrent slots.`,
+      `Alert on <b>latency percentiles</b>, not utilisation. The percentile is what users feel and it moves first.`,
+      `Treat above roughly 70% sustained as a signal to add capacity, not as evidence of efficiency.`],
+    trade:`Low utilisation buys predictable latency and costs idle capacity. How close you can run to the
+           edge depends on how fast you can add more.`,
+    trap:`Treating high CPU as the goal of efficiency work. A service pinned at 95% has no headroom, so
+          its tail is bad continuously and catastrophic occasionally.`,
+    build:`Plot p99 against throughput rather than time. The rate where p99 starts climbing steeply is
+           your usable capacity, and it is lower than the rate where errors begin.`,
+    refs:[] }
+
   ] },
 
 { num:9, id:"concurrency", phase:4, name:"Concurrency and asynchronous work",
-  lede:"Not yet rewritten.",
+  lede:"Doing several things at once, on purpose, with a limit.",
   topics:[
-  { id:"async-io", name:"Async I/O in your code: what actually yields, and how pools starve", depth:"build", core:true,
-    why:`Not yet rewritten in the new format.` },
-  { id:"background-jobs", name:"Background jobs: moving work out of the request", depth:"build", core:true,
-    why:`Not yet rewritten in the new format.` },
-  { id:"scheduled-work", name:"Scheduled work, overlapping runs and singletons", depth:"build", core:false,
-    why:`Not yet rewritten in the new format.` },
-  { id:"shared-state", name:"Shared state: races, atomic updates and compare-and-swap", depth:"build", core:true,
-    why:`Not yet rewritten in the new format.` },
-  { id:"distributed-locks", name:"Distributed locks and leases", depth:"understand", core:false,
-    why:`Not yet rewritten in the new format.` },
-  { id:"backpressure", name:"Concurrency limits and backpressure", depth:"build", core:false,
-    why:`Not yet rewritten in the new format.` }
+
+  { id:"async-io", name:"What actually yields", depth:"build", core:true,
+    why:`Async does not make anything faster. It makes waiting cheap, so the gain comes entirely from
+         overlapping waits — and disappears the moment you await each one in turn.`,
+    code:[{label:"Measured: the same ten 100ms calls, three ways", lang:"js", code:`// Serialised: each await finishes before the next begins.
+for (const id of ids) results.push(await fetchOne(id));
+//   await in a loop:      1005 ms
+
+// Concurrent: all ten in flight, wait once.
+await Promise.all(ids.map(fetchOne));
+//   Promise.all:           100 ms
+
+// Bounded: 50 items, at most 5 at a time. Ten batches of 100ms.
+await mapWithLimit(items, 5, fetchOne);
+//   limit of 5, 50 items: 1005 ms
+
+async function mapWithLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i]);
+    }
+  }
+  await Promise.all(Array.from({ length: limit }, worker));
+  return out;
+}`}],
+    points:[
+      `Start the work, <em>then</em> await it. Collect promises first and await them together.`,
+      `Running ten concurrently means deciding what happens when three fail. <code>Promise.all</code> rejects on the first; <code>allSettled</code> lets you handle each.`,
+      `Concurrency is bounded by something whether you choose it or not. Choose it and the limit is visible and tunable; leave it and the limit is whichever downstream thing collapses first.`,
+      `For CPU-bound work use <code>worker_threads</code>. No amount of <code>await</code> helps.`],
+    trap:`<code>Promise.all</code> over a list of unknown length. Ten concurrent calls is an
+          optimisation; ten thousand is an attack on your own database, and the list is user-supplied often enough.`,
+    build:`Find an endpoint with two independent sequential awaits and make them concurrent. Then find a
+           map over a user-supplied list and put a limit on it.`,
+    refs:[] },
+
+  { id:"background-jobs", name:"Moving work out of the request", depth:"build", core:true,
+    why:`A request should do the minimum needed to answer correctly. Everything else makes the response
+         slower, makes it likelier to fail, and ties retryable work to something that cannot be retried.`,
+    code:[{label:"The rule, and the job row that is the real truth", lang:"js", code:`// POST /orders
+//   IN the request (the caller needs these to answer):
+//     validate, reserve stock, take payment, write the order,
+//     enqueue the rest  <- in the SAME transaction as the write
+//
+//   IN jobs (the caller does not need the result):
+//     confirmation email    retryable, external, slow
+//     invoice PDF           slow, nobody is waiting
+//     warehouse notify      must not fail checkout
+//     recommendation model  nobody notices the delay
+
+// The queue is delivery; the ROW is the truth.
+create table jobs (
+  id          bigint generated always as identity primary key,
+  type        text not null,
+  payload_id  bigint not null,        -- an id, never the whole object
+  status      text not null default 'pending',
+  attempts    int  not null default 0,
+  last_error  text,
+  run_after   timestamptz not null default now(),
+  completed_at timestamptz
+);`}],
+    points:[
+      `Write the job in the <b>same transaction</b> as the state change, or you can commit the order and lose the email.`,
+      `Put an <b>id</b> in the payload, not the object. The object may have changed by the time the job runs.`,
+      `A queued job disappears from the user's view. Status on the resource and a way to see failures are part of the feature.`,
+      `Every job will run more than once. Design the handler so a repeat is harmless.`],
+    trade:`A database job table is transactional with your data, queryable with SQL and trivially
+           debuggable, and it polls. A broker gives push delivery and throughput, and is a second system
+           that is not transactional with your database. Below a few thousand jobs a minute the table wins.`,
+    trap:`Enqueuing before the transaction commits. The worker is fast enough to find no row, or the
+          transaction rolls back and the email goes out for an order that does not exist.`,
+    build:`Move one inline external call to a job written in the same transaction. Make the call fail
+           permanently and confirm the endpoint still succeeds and the failure is visible.`,
+    refs:[] },
+
+  { id:"scheduled-work", name:"Periodic work that runs once", depth:"build", core:false,
+    why:`A timer inside your service fires in every process. Three replicas means the nightly statement
+         job runs three times, and nobody notices in staging where there is one instance.`,
+    code:[{label:"Postgres advisory lock, verified across two sessions", lang:"sql", code:`-- Instance A                     -- Instance B, same moment
+select pg_try_advisory_lock(42);  select pg_try_advisory_lock(42);
+--  t   <- A runs the job         --  f   <- B SKIPS, and does not block
+
+select pg_advisory_unlock(42);    -- A finishes
+                                  select pg_try_advisory_lock(42);
+                                  --  t
+
+-- try_ rather than the blocking form: a second instance should skip
+-- this run, not queue up to repeat it afterwards. The lock is tied to
+-- the session, so a crashed instance releases it automatically.`}],
+    points:[
+      `Three failure modes appear only in production: runs on every instance, a slow run overlapping the next, and runs silently missed during a restart.`,
+      `Record the start and end of every run, and <b>alert when an expected run did not happen</b>. Silent non-execution is the one nobody builds for.`,
+      `Decide explicitly whether a missed run is skipped or run late. Leaving it undecided means skipped.`,
+      `Assume a five-minute job will one day overlap a ten-minute schedule.`],
+    trade:`In-process with a lock is zero infrastructure and versioned with the app. An external
+           scheduler handles the singleton for you and makes the job a separate deployable with its own
+           config drift. One or two jobs: in-process. More, or schedules non-deployers need to see: external.`,
+    trap:`Assuming one instance. Every rolling deploy runs two versions at once.`,
+    build:`Run three instances locally and confirm the job runs three times. Add the lock, confirm once.
+           Then make it take longer than its interval and confirm the next tick skips.`,
+    refs:[["Postgres: advisory locks","https://www.postgresql.org/docs/current/explicit-locking.html"]] },
+
+  { id:"shared-state", name:"Races and atomic updates", depth:"build", core:true,
+    why:`Read, decide, write is a race whenever two of anything can run at once. The check was correct
+         and ran correctly, and still allowed the thing it was checking for.`,
+    code:[{label:"Four fixes, in the order to try them", lang:"sql", code:`-- The race: a promo code limited to 100 uses.
+--   uses = count_uses(code);  if (uses < 100) insert_use(...)
+-- Under load, 140 requests all count 99 and all insert.
+
+-- 1. One atomic statement. The database decides, once.
+insert into uses (code, user_id)
+select $1, $2 where (select count(*) from uses where code = $1) < 100;
+
+-- 2. A constraint that makes the bad state impossible.
+--    Give each use a sequence number, unique (code, seq), seq < 100:
+--    the 101st INSERT fails rather than being politely prevented.
+
+-- 3. Compare-and-swap on a counter.
+update promo set used = used + 1
+ where code = $1 and used < 100        -- 0 rows means full
+returning used;
+
+-- 4. A lock, only if none of the above fit.
+select * from promo where code = $1 for update;`}],
+    points:[
+      `The list is ordered by how much concurrency each preserves. The familiar lock is the most expensive answer on it.`,
+      `An <b>in-process mutex</b> protects one process. With two instances it protects nothing, and the bug returns the day you scale out.`,
+      `Often the best answer is no lock at all: a unique constraint makes the invalid state impossible regardless of ordering.`,
+      `Same shape as the lost update in the database stage, appearing in-process, across processes, and across services.`],
+    trap:`Synchronising shared state with a mutex in a service that runs more than one instance. The code
+          looks safe, passes every local test, and provides nothing in production.`,
+    build:`Find a check-then-act — counting before inserting, checking stock before decrementing — fire
+           fifty concurrent requests at it, and assert the invariant held.`,
+    refs:[] },
+
+  { id:"distributed-locks", name:"Distributed locks", depth:"understand", core:false,
+    why:`Usually the wrong tool. A constraint is correct where a lock is only probable, and a lock held
+         across a network can expire while its holder still believes it holds it.`,
+    code:[{label:"When to use what", lang:"text", code:`Only one of N instances runs a nightly job
+  -> a lease. pg_try_advisory_lock, or SET NX EX in Redis.
+     Running twice is wasteful, not wrong, IF the job is idempotent.
+
+A counter must not exceed a limit
+  -> NOT a lock. An atomic conditional update.
+
+Only one order per idempotency key
+  -> NOT a lock. A unique constraint.
+
+Exclusive access to something that cannot be made idempotent, where
+running twice is genuinely harmful
+  -> a lease WITH a fencing token, and the resource must check it:
+
+     token = acquire_lease("job", ttl=60)   # 41, then 42, then 43...
+     do_work()
+     resource.write(data, fence=token)      # rejects anything < 43
+
+Without the fence, "I hold the lease" means "I held it when I last
+checked", which is not the same thing.`}],
+    points:[
+      `A distributed lock <b>must expire</b> or a crashed holder blocks everyone forever — and expiry means it can expire while the holder is still working.`,
+      `A GC pause, a slow disk or a partition can stall the holder past the lease. Two processes then both believe they hold it.`,
+      `Expiry is measured by clocks on different machines, which the clocks topic revisits.`,
+      `Redlock's safety has been publicly disputed by serious people on both sides. That dispute is itself the argument for not relying on a lock for correctness.`],
+    trade:`Making the work idempotent is almost always the better investment: idempotency is useful
+           everywhere, and a lock is useful only while it holds.`,
+    trap:`Treating acquisition as a guarantee for the duration of the work. It is a guarantee at the
+          instant you acquired it.`,
+    build:`Find a distributed lock in your systems and decide which case it is. Then ask what happens if
+           the holder pauses for twice the lease, and whether anything would detect it.`,
+    refs:[["Redis: distributed locks","https://redis.io/docs/latest/develop/use-cases/patterns/distributed-locks/"]] },
+
+  { id:"backpressure", name:"Limits and shedding", depth:"build", core:false,
+    why:`When work arrives faster than you can do it, rejecting some quickly beats failing all of them
+         slowly. An unbounded queue turns overload into a timeout for everyone.`,
+    code:[{label:"Express: shed rather than queue", lang:"js", code:`const MAX_IN_FLIGHT = 100;        // from your measured capacity, not a
+let inFlight = 0;                 // round number
+
+app.use((req, res, next) => {
+  if (inFlight >= MAX_IN_FLIGHT) {
+    res.set('Retry-After', '1');
+    return res.status(503).json({ code: 'OVERLOADED' });
+  }
+  // A request already past its client's deadline is dead work.
+  if (req.deadline && Date.now() > req.deadline)
+    return res.status(504).json({ code: 'DEADLINE_EXCEEDED' });
+
+  inFlight++;
+  res.on('finish', () => inFlight--);
+  res.on('close',  () => { if (!res.writableEnded) inFlight--; });
+  next();
+});
+
+// Per-dependency budgets, so one slow upstream cannot consume them all:
+//   payments 20 concurrent | search 10 | email 5`}],
+    points:[
+      `Without a limit, latency climbs until everything times out and you spend capacity producing responses nobody is waiting for.`,
+      `A rejected request is a clear signal the client can act on. A 40-second timeout tells it nothing useful and consumed your capacity.`,
+      `Set the limit from the rate where p99 starts climbing, not where errors start.`,
+      `Each dependency gets its own budget. That is the bulkhead from the reliability stage.`],
+    trap:`Adding a queue to absorb bursts without bounding it. By the time anyone looks there is a
+          ten-minute backlog of requests whose clients disconnected nine minutes ago.`,
+    build:`Add an in-flight limit and confirm that beyond it you get immediate 503s rather than slow
+           200s. Compare total successful requests under a burst, both ways.`,
+    refs:[] }
+
   ] },
 
 { num:10, id:"messaging", phase:4, name:"Messaging and event-driven architecture",
