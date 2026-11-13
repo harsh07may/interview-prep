@@ -2431,41 +2431,548 @@ app.use((req, res, next) => {
   ] },
 
 { num:10, id:"messaging", phase:4, name:"Messaging and event-driven architecture",
-  lede:"Not yet rewritten.",
+  lede:"Decoupling work in time, and the guarantees you actually get when you do.",
   topics:[
-  { id:"broker-choice", name:"Queue, pub/sub and log, and what delivery really guarantees", depth:"understand", core:true,
-    why:`Not yet rewritten in the new format.` },
-  { id:"consumer-idempotency", name:"At-least-once delivery and consumer idempotency", depth:"build", core:true,
-    why:`Not yet rewritten in the new format.` },
-  { id:"ordering-partitions", name:"Ordering, partitioning and consumer groups", depth:"build", core:false,
-    why:`Not yet rewritten in the new format.` },
-  { id:"dlq-retries", name:"Retries, dead-letter queues and poison messages", depth:"build", core:true,
-    why:`Not yet rewritten in the new format.` },
-  { id:"outbox", name:"The outbox pattern and dual writes", depth:"build", core:false,
-    why:`Not yet rewritten in the new format.` },
-  { id:"event-schemas", name:"Event schemas and versioning", depth:"build", core:false,
-    why:`Not yet rewritten in the new format.` },
+
+  { id:"broker-choice", name:"Queue, pub/sub or log", depth:"understand", core:true,
+    why:`Three different shapes, not three products. And the guarantee everyone wants is not on offer:
+         exactly-once <em>delivery</em> does not exist over an unreliable network.`,
+    code:[{label:"What each shape gives you", lang:"text", code:`                 work queue     pub/sub         log
+one message to   one consumer   all subscribers all consumer groups
+retained after   acknowledgement delivery       a retention window
+late subscriber  gets nothing   gets nothing    can replay from start
+ordering         usually none   none            per partition
+scaling          add workers    add subscribers add partitions
+typical          SQS, RabbitMQ  SNS, Pub/Sub    Kafka, Redpanda
+
+"Exactly once" as advertised means exactly-once processing WITHIN the
+broker's own boundary: an offset commit and a state update made atomic
+by the broker. The moment your consumer charges a card or calls an
+external API you are back to at-least-once, and idempotency is the
+only thing between you and a duplicate charge.`}],
+    points:[
+      `Pick by <b>who needs this, and for how long</b>. One consumer, no history: a queue. Several: pub/sub. Consumers that arrive later or need to rebuild by replaying: a log.`,
+      `<b>At-most-once</b> is fine for metrics and never for money. <b>At-least-once</b> is the realistic default.`,
+      `Design for duplicates from the start. Bolting it on later means auditing every handler you already wrote.`,
+      `A log is strictly more capable and strictly more work: retention, partitions, offsets, consumer groups.`],
+    trap:`Believing a broker's exactly-once setting covers your side effects. It covers its own
+          bookkeeping; your handler charging a card twice is outside that boundary.`,
+    build:`Classify every async message in your system as queue, pub/sub or log. Then for each, answer:
+           what happens if it is delivered twice?`,
+    refs:[] },
+
+  { id:"consumer-idempotency", name:"Surviving a duplicate", depth:"build", core:true,
+    why:`Duplicates are routine, not an edge case: a slow acknowledgement, a consumer restart, a
+         rebalance. The fix is not stopping them — it is making the second run harmless.`,
+    code:[{label:"Postgres: the dedupe record commits WITH the effect", lang:"sql", code:`create table processed (
+  message_id text primary key,
+  at         timestamptz not null default now()
+);
+
+begin;
+  insert into processed (message_id) values ($1)
+  on conflict do nothing;
+  -- INSERT 0 1  -> we claimed it, do the work
+  -- INSERT 0 0  -> already handled: skip and acknowledge
+
+  update orders set status = 'paid' where id = $2;
+commit;
+
+-- Prune past the broker's maximum redelivery window:
+delete from processed where at < now() - interval '7 days';`},
+           {label:"Node: the three cases", lang:"js", code:`async function handle(msg) {
+  await db.tx(async (tx) => {
+    const claimed = await tx.claimMessage(msg.id);   // unique constraint
+    if (!claimed) return;                            // duplicate: do nothing
+    await applyEffect(tx, msg);                      // SAME transaction
+  });
+  await msg.ack();
+}
+
+// External side effects cannot join your transaction. Pass the message
+// id as the provider's idempotency key so their side dedupes:
+await gateway.charge(amount, { idempotencyKey: msg.id });
+
+// Prefer naturally idempotent effects where the design allows:
+//   set status = 'shipped'              safe to repeat
+//   count = count + 1                   NOT safe
+//   insert ... on conflict do nothing   safe to repeat`}],
+    points:[
+      `The producer sets a <b>stable id</b>, not the broker, so a republished message is recognisably the same event.`,
+      `The dedupe record and the side effect must commit <b>together</b>. Two steps can fail between them.`,
+      `Natural idempotency is free and constrains how you model the operation: store the resulting value, not the delta.`,
+      `The table grows forever unless pruned.`],
+    trap:`Recording the message as processed <em>after</em> doing the work, in a separate step. A crash
+          in the gap means the redelivery does it all again — the exact case the table exists to prevent.`,
+    build:`Deliver the same message twice deliberately and check the data. Add the processed table in the
+           same transaction, repeat, then kill the consumer between the effect and the ack.`,
+    refs:[] },
+
+  { id:"ordering-partitions", name:"Ordering and partition keys", depth:"build", core:false,
+    why:`Parallelism and ordering are in direct conflict. The compromise every log makes is to order
+         within a partition, which makes the partition key a promise about what stays ordered.`,
+    code:[{label:"The key decides what is ordered", lang:"text", code:`key = event type              key = order_id
+  p0: created                   p0: order 7 created, paid, shipped
+  p1: paid                      p1: order 8 created, cancelled
+  p2: cancelled                 p2: order 9 created, paid
+
+left:  nothing about ONE order is ordered. "cancelled" can arrive
+       before "created" and the consumer fails on a missing row.
+right: each order's events are strictly ordered. Different orders
+       interleave freely, which nobody cares about.
+
+Consumers in a group, 3 partitions:
+  1 consumer  -> handles all 3
+  3 consumers -> one each
+  5 consumers -> three work, two sit idle
+
+The partition count is the ceiling on parallelism, and raising it
+later rehashes keys, so entities move partitions and lose ordering
+relative to their own history.`}],
+    points:[
+      `Choose the <b>coarsest key whose ordering you actually need</b> — usually the entity, not the tenant.`,
+      `A key with few distinct values concentrates traffic; a skewed one gives you a hot partition that adding consumers cannot help.`,
+      `Make consumers tolerate out-of-order arrival anyway: carry a version and ignore anything older than what you applied.`,
+      `A rebalance redelivers in-flight work elsewhere, which is another source of duplicates.`],
+    trap:`A random partition key for throughput, with something downstream relying on ordering. It works
+          under light load and fails under the load that made you want the throughput.`,
+    build:`Write down your partition key and what ordering it guarantees. Find a consumer assuming a
+           different one, and add a version check so an old message is ignored.`,
+    refs:[] },
+
+  { id:"dlq-retries", name:"Retries and dead letters", depth:"build", core:true,
+    why:`Some failures are transient and some are permanent. Treating them the same is how one bad
+         message blocks a partition, or how a brief outage discards a day of work.`,
+    code:[{label:"Classify first, then retry or park", lang:"js", code:`const MAX_ATTEMPTS = 5;
+
+async function consume(msg) {
+  try {
+    await handle(msg);
+    return msg.ack();
+  } catch (e) {
+    if (!isRetryable(e)) {                  // parse error, constraint, bug
+      await deadLetter(msg, e);             // no point retrying
+      return msg.ack();
+    }
+    if (msg.attempts >= MAX_ATTEMPTS) {
+      await deadLetter(msg, e);             // stop blocking the partition
+      return msg.ack();
+    }
+    return msg.nack({ delay: backoff(msg.attempts) });
+  }
+}
+
+const isRetryable = (e) =>
+  e.code === 'ETIMEDOUT' || e.status === 503 || e.code === '40P01'; // deadlock
+
+const backoff = (n) =>
+  Math.min(2 ** n, 60) * 1000 * (0.5 + Math.random());   // jitter`}],
+    points:[
+      `A retry limit is mandatory. Without one a <b>poison message</b> blocks everything behind it in an ordered partition, forever.`,
+      `The dead letter must carry the original message, the error and the attempt count, so it is diagnosable without a log search.`,
+      `Replaying dead letters after a fix only works if the handler is idempotent.`,
+      `For backoffs beyond a few seconds, push the delay back to the broker: a worker sleeping is a worker not doing the other work.`],
+    trap:`A dead-letter queue with no alert. Messages land there silently, the system looks healthy, and
+          the data loss is found weeks later when someone asks about a missing refund.`,
+    build:`Put a deliberately malformed message in a queue and watch: how long it retries, whether it
+           blocks anything, and whether anything tells you. Then add classification and an alert on depth.`,
+    refs:[] },
+
+  { id:"outbox", name:"The outbox pattern", depth:"build", core:false,
+    why:`You cannot commit a database transaction and publish a message atomically. Whichever order you
+         pick, a failure between the two leaves an order with no event, or an event for a rolled-back order.`,
+    code:[{label:"Postgres: verified, including the relay claim", lang:"sql", code:`create table outbox (
+  id           bigint generated always as identity primary key,
+  aggregate_id bigint      not null,
+  type         text        not null,
+  payload      jsonb       not null,
+  created_at   timestamptz not null default now(),
+  published_at timestamptz
+);
+create index on outbox (id) where published_at is null;   -- relay's index
+
+-- The write and the event commit TOGETHER, or neither does.
+begin;
+  insert into orders (customer_id, status, total_cents)
+       values ($1, 'paid', $2) returning id as order_id;
+  insert into outbox (aggregate_id, type, payload)
+       values (:order_id, 'order.paid', jsonb_build_object(...));
+commit;
+
+-- The relay claims a batch. SKIP LOCKED lets several relay instances
+-- run at once without two of them taking the same row.
+update outbox set published_at = now()
+ where id in (select id from outbox where published_at is null
+              order by id limit 100 for update skip locked)
+returning id, type, payload;`}],
+    points:[
+      `If the transaction rolls back, so does the event. That is exactly right.`,
+      `The relay may publish and crash before marking the row, so the event goes out twice — fine, because consumers are idempotent.`,
+      `<b>Change data capture</b> is the alternative: read the replication log, no outbox table, no relay. Heavier infrastructure, and the events are your schema rather than a contract you chose.`,
+      `Order by id so events leave in the order they were created.`],
+    trap:`Marking rows published before the broker confirms. A crash in that window loses the event
+          permanently — the exact failure the outbox exists to prevent, reintroduced one line later.`,
+    build:`Implement it for one event, then stop the broker, perform the operation, and confirm the order
+           and its outbox row both committed and the event delivers when the broker returns.`,
+    refs:[] },
+
+  { id:"event-schemas", name:"Events are a contract", depth:"build", core:false,
+    why:`Unlike an API, where you can see your callers, a published event can be consumed by a team that
+         never told you. That makes event schemas harder to change, not easier.`,
+    code:[{label:"An envelope worth standardising", lang:"json", code:`{
+  "id":          "01J9F0G7Q0X2",
+  "type":        "order.paid",
+  "version":     1,
+  "occurred_at": "2026-11-12T07:41:03.118Z",
+  "subject":     "order/8841",
+  "producer":    "orders-service",
+  "data": {
+    "order_id":    8841,
+    "customer_id": 42,
+    "total_cents": 4999,
+    "currency":    "INR"
+  }
+}`},
+           {label:"What each envelope field is for", lang:"text", code:`id           deduplication, and the key the consumer records
+type         routing, and what tells a consumer to care
+version      lets a consumer handle two shapes during a migration
+occurred_at  when it HAPPENED, not when it was delivered
+subject      the entity, so a consumer can order by it
+data         the payload, and the only part that differs by type
+
+Thin vs fat:
+  thin  ids only -> consumers call back, and one event becomes a
+        burst of requests at the producer, right when something
+        interesting just happened
+  fat   carries the data -> no call-back storm, and the data is a
+        snapshot that may already be stale
+
+Usual balance: identifiers plus the few fields that describe what
+changed. Avoid publishing your whole entity: every field becomes
+part of the contract.`}],
+    points:[
+      `Additive only. Never remove, rename or retype a field.`,
+      `Name events in the past tense and in business language: <code>order.paid</code>, not <code>order_table_updated</code>.`,
+      `The envelope stays stable even when payloads differ, which is what lets consumers route and dedupe without understanding the payload.`,
+      `A schema registry earns its place once more than one team produces events.`],
+    trap:`Publishing your database row as the event. The event's schema is now your table's schema, so a
+          column rename breaks every consumer and internal fields you never meant to share are public.`,
+    build:`Take one event you publish and check it has an id, type, version and timestamp. Then find out
+           who consumes it — the uncertainty is why the additive-only rule exists.`,
+    refs:[["CloudEvents","https://cloudevents.io/"]] },
+
   { id:"sagas", name:"Sagas and compensation", depth:"understand", core:false,
-    why:`Not yet rewritten in the new format.` },
-  { id:"read-models", name:"Read models, projections and when CQRS is worth it", depth:"understand", core:false,
-    why:`Not yet rewritten in the new format.` }
+    why:`First ask whether these steps should be one service and one transaction, because usually they
+         should. Needing a saga is most often a boundary drawn in the wrong place.`,
+    code:[{label:"The shape, including what people skip", lang:"text", code:`place_order saga:
+
+  step          forward              compensation
+  1  stock      reserve(order)       release(order)
+  2  payment    charge(card, key)    refund(charge_id)
+  3  logistics  book(courier)        cancel(booking)
+
+Step 3 fails -> run 2's then 1's compensation, in reverse.
+
+The parts people skip:
+  - compensations FAIL TOO. They need retries, their own dead letter,
+    and a stuck one needs a human.
+  - every step and compensation must be idempotent: the saga resumes
+    after a crash and steps re-run.
+  - intermediate states are REAL and visible. "paid but not booked"
+    has to be a legitimate order status your model allows, not an
+    impossible state.
+  - some steps cannot be compensated. An email has been sent. Put
+    those last, after everything that can still fail.`}],
+    points:[
+      `<b>Compensation is not rollback.</b> A refund is a new business fact: the charge happened, the statement shows both, the money moved twice.`,
+      `<b>Orchestration</b> puts the state machine in one component you can query for stuck instances. <b>Choreography</b> has no coordinator and the flow exists only in a diagram that drifts.`,
+      `Two or three steps with genuinely independent reactions: choreography is fine. Past that, having one place to ask "what happened to this order" dominates.`,
+      `If two services are always modified together and never useful apart, that is evidence they are one service.`],
+    trap:`Modelling compensation as rollback and hiding the intermediate states. The customer sees a
+          charge and a refund, support sees a status that is not supposed to exist, and the model has no
+          way to represent either.`,
+    build:`Write the table above for a real multi-service operation. Find the first step that cannot be
+           compensated and check it runs last. Then ask whether the first two could simply be one service.`,
+    refs:[] },
+
+  { id:"read-models", name:"Projections, and when CQRS is worth it", depth:"understand", core:false,
+    why:`Sometimes the shape that is right for writing is wrong for reading. A projection is a separate
+         model built from the write model, with staleness as the price and complexity as the risk.`,
+    code:[{label:"Rebuildable by design", lang:"js", code:`// A projection is DISPOSABLE. Write the rebuild first — you will need
+// it the day the projection logic has a bug.
+async function rebuildSellerStats() {
+  await db.query('truncate seller_stats');
+  await db.query(\`insert into seller_stats (seller_id, month, orders, revenue_cents)
+                  select seller_id, date_trunc('month', created_at),
+                         count(*), sum(total_cents)
+                  from orders group by 1, 2\`);
+  await db.query('update projection_state set position = $1', [latestEventId()]);
+}
+
+// Then the incremental update, from the outbox or the event stream.
+// Record the position processed so far so it can resume.
+
+// Make the staleness visible rather than hoping nobody notices:
+//   res.set('X-Data-As-Of', stats.updatedAt.toISOString());`}],
+    points:[
+      `Add a projection for <b>one query that is genuinely slow</b>, keeping the write model as the source of truth.`,
+      `Record the position processed so far, so it can resume rather than restart.`,
+      `CQRS is useful for a specific expensive query and a liability as a blanket architecture.`,
+      `Ask honestly whether an index would have fixed the original query. Surprisingly often it would.`],
+    trade:`<b>Event sourcing</b> deserves a warning, because this is where read models often lead. It
+           gives a complete audit log and projections for free, and makes every schema change a question
+           about events you can never alter, debugging a matter of replaying history, and onboarding much
+           harder. Right where the event log <em>is</em> the product — ledgers, regulated audit systems.
+           A poor default for a service that mostly stores current state.`,
+    trap:`A projection with no rebuild path. The first bug leaves you with a wrong table, no way to
+          regenerate it, and a choice between a manual fix and telling users the numbers were wrong.`,
+    build:`Find your slowest read query, design the projection, write the rebuild script first, then the
+           incremental update. Measure query time and lag.`,
+    refs:[] }
+
   ] },
 
 { num:11, id:"storage", phase:4, name:"Storage and external integrations",
-  lede:"Not yet rewritten.",
+  lede:"Files, bytes, and the other people's systems you have to talk to.",
   topics:[
-  { id:"file-uploads", name:"File uploads", depth:"build", core:true,
-    why:`Not yet rewritten in the new format.` },
-  { id:"object-storage", name:"Object storage and pre-signed URLs", depth:"build", core:false,
-    why:`Not yet rewritten in the new format.` },
-  { id:"streaming-payloads", name:"Streaming large payloads, imports and exports", depth:"build", core:false,
-    why:`Not yet rewritten in the new format.` },
-  { id:"third-party-apis", name:"Consuming third-party APIs", depth:"build", core:false,
-    why:`Not yet rewritten in the new format.` },
+
+  { id:"file-uploads", name:"Accepting files safely", depth:"build", core:true,
+    why:`Everything the client tells you about a file is a claim: the name, the declared type, the size
+         header. Treating any of them as fact is how an upload feature becomes code execution.`,
+    code:[{label:"Express + multer: check the bytes, not the claim", lang:"js", code:`const MAGIC = {
+  'image/png':  Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+  'image/jpeg': Buffer.from([0xff, 0xd8, 0xff]),
+  'application/pdf': Buffer.from('%PDF-'),
+};
+
+const upload = multer({
+  storage: multer.diskStorage({ destination: '/tmp/uploads',
+    filename: (req, file, cb) => cb(null, randomUUID()) }),  // OUR name
+  limits: { fileSize: 10 * 1024 * 1024, files: 1 },  // enforced WHILE reading
+});
+
+app.post('/uploads', upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ code: 'FILE_REQUIRED' });
+
+  const head = await readFirstBytes(req.file.path, 8);
+  const real = Object.entries(MAGIC)
+    .find(([, sig]) => head.subarray(0, sig.length).equals(sig))?.[0];
+  if (!real) return res.status(415).json({ code: 'UNSUPPORTED_MEDIA_TYPE' });
+
+  const key = \`uploads/\${randomUUID()}\${extFor(real)}\`;
+  await objectStore.put(key, createReadStream(req.file.path), real);
+  await files.insert({ key, ownerId: req.user.id, contentType: real,
+                       displayName: sanitize(req.file.originalname) });
+  res.status(201).json({ id: key });
+});`}],
+    points:[
+      `<code>Content-Length</code> is a caller-set header and can understate the body. The limit must be enforced <b>while reading</b>, which multer's <code>limits</code> does.`,
+      `Never use the caller's filename on disk. Keep it as an escaped display label only.`,
+      `Serve user content from a <b>different origin</b>, or it inherits your cookies and your trust.`,
+      `On the way out set <code>Content-Disposition: attachment</code> and <code>X-Content-Type-Options: nosniff</code>.`],
+    trade:`Magic bytes catch a mislabelled file and do not make it safe: a genuine PNG can still exploit
+           an image library. Re-encoding images rather than storing them as received discards everything
+           that was not pixels, and is the single most effective step.`,
+    trap:`Trusting the declared <code>Content-Type</code>. A PHP script declared as an image, saved under
+          its own name in a served directory, is remote code execution.`,
+    build:`Send your endpoint four things: a file larger than the limit with a small Content-Length, a
+           script renamed <code>.png</code>, a filename containing <code>../</code>, and a 2GB file.`,
+    refs:[["OWASP: file upload","https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html"]] },
+
+  { id:"object-storage", name:"Pre-signed URLs", depth:"build", core:false,
+    why:`Files do not belong on your instance's disk, which vanishes on deploy, nor in your database.
+         Better still, the bytes never pass through your service at all.`,
+    code:[{label:"Four steps, and what each one protects", lang:"js", code:`// 1. Client asks. We create a pending row and sign a URL WITH CONDITIONS.
+app.post('/uploads', async (req, res) => {
+  const id  = randomUUID();
+  const key = \`uploads/\${id}\`;
+  await files.insert({ id, key, ownerId: req.user.id, status: 'pending' });
+
+  const url = await getSignedUrl(s3, new PutObjectCommand({
+    Bucket: BUCKET, Key: key,
+    ContentType: req.body.contentType,        // must match on upload
+    ContentLength: req.body.size,             // bounded, not open-ended
+  }), { expiresIn: 300 });                    // 5 minutes
+
+  res.json({ id, url });
+});
+
+// 2. Client PUTs straight to the store. We are not involved.
+// 3. Client confirms; we HEAD the object and check what actually landed.
+app.post('/uploads/:id/complete', async (req, res) => {
+  const head = await s3.send(new HeadObjectCommand({ Bucket, Key: key }));
+  if (head.ContentLength > MAX) return res.status(413).json({ code: 'TOO_LARGE' });
+  await files.setStatus(req.params.id, 'ready');
+  res.json({ id: req.params.id });
+});
+// 4. A cleanup job deletes pending rows older than an hour, and their objects.`}],
+    points:[
+      `A signature with <b>no conditions</b> authorises a PUT to that key and nothing else — any size, any type, at your expense.`,
+      `Nothing references a file until it is <code>ready</code>, so an interrupted upload is just a pending row.`,
+      `Downloads work the same way: a short-lived signed GET instead of a public bucket or a proxied stream.`,
+      `Metadata in your database, bytes in the store. Neither duplicates the other.`],
+    trade:`Proxying lets you validate bytes before they are stored, and costs worker time, bandwidth and
+           a request duration you do not control. Sign for anything large and validate on confirm.`,
+    trap:`Signing with no content-length or content-type condition.`,
+    build:`Implement the four steps, then use the URL after it expires, upload something larger than the
+           condition allows, and abandon an upload halfway.`,
+    refs:[] },
+
+  { id:"streaming-payloads", name:"Streaming large payloads", depth:"build", core:false,
+    why:`Memory should be a function of how fast you process, not how big the file is. Buffering works
+         until the day the file is large, and then the process dies with no stack trace.`,
+    code:[{label:"Measured on a 77MB file", lang:"js", code:`// Buffered: the whole file resident before anything happens.
+const buf = fs.readFileSync('big.bin');
+crypto.createHash('sha256').update(buf).digest('hex');
+// rss at start:           42 MB
+// rss after readFileSync: 119 MB       <- grew by the whole file
+
+// Streamed: one chunk at a time, pipeline applies backpressure.
+const hash = crypto.createHash('sha256');
+await pipeline(fs.createReadStream('big.bin'), hash);
+// rss at start:      42 MB
+// rss after stream:  74 MB             <- and it does NOT grow with
+//                                         the file; 10GB is the same
+
+// Imports: chunk, commit per batch, persist the offset so a failure
+// resumes rather than restarting, and report errors per row.`}],
+    points:[
+      `A streamed response starts arriving immediately, which keeps proxies and clients from timing out on a long export.`,
+      `Use the <code>pipeline</code> helper: it handles backpressure and cleans up on error. A manual loop usually does neither.`,
+      `Kill the client mid-download and your server should stop querying, not keep producing rows for nobody.`,
+      `For imports, report per-row errors rather than failing the whole file.`],
+    trade:`A streamed response cannot change its mind: the 200 is sent before most of the work, so an
+           error at row 90,000 cannot become a 500. For anything a customer relies on, write the export
+           to object storage as a job and hand back a link. Stream for the interactive case.`,
+    trap:`Building a large response as a string and sending it at the end. Passes every test with a
+          small dataset, and kills the process on the biggest customer's export.`,
+    build:`Measure peak memory for a small and a large export. Convert to streaming and measure again —
+           the two figures should now match.`,
+    refs:[] },
+
+  { id:"third-party-apis", name:"Consuming someone else's API", depth:"build", core:false,
+    why:`Their availability becomes yours, and their rate limits, credentials and clock become your
+         problem. Integrations have specific concerns beyond the general reliability patterns.`,
+    code:[{label:"One module owns the provider's shapes", lang:"js", code:`// Our interface, our types. Their field names stop at this boundary.
+class StripeGateway {
+  async charge({ amountCents, currency, idempotencyKey }) {
+    const r = await fetch(\`\${this.base}/v1/charges\`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey,   // THEIR mechanism
+                 Authorization: \`Bearer \${this.key}\` },
+      body: form({ amount: amountCents, currency }),
+      signal: AbortSignal.timeout(5000),              // always a deadline
+    });
+
+    if (r.status === 429)
+      throw new RateLimited(Number(r.headers.get('Retry-After') ?? 5));
+    if (r.status >= 500) throw new Retryable(await r.text());
+    if (r.status === 402)
+      throw new CardDeclined((await r.json()).error.decline_code);
+
+    const j = await r.json();
+    return { id: j.id, amountCents: j.amount };       // our type
+  }
+}
+// Tests use a fake implementing the same interface, built from
+// responses recorded once from the real sandbox — including the 402.`}],
+    points:[
+      `Separate sandbox and production credentials, never the same value. A test that charges a real card is a story every team has.`,
+      `Pass your own stable id as <b>their</b> idempotency key, so your retry is not their duplicate.`,
+      `Record real responses — especially the error ones — as fixtures. They are what you can never reproduce on demand.`,
+      `Retries and circuit breaking are in the reliability stage; keep them inside this one module so every call behaves the same.`],
+    trap:`Retrying a 429 immediately without reading <code>Retry-After</code>. You extend the block
+          instead of waiting it out, turning a brief limit into an hour-long lockout.`,
+    build:`Check three things per integration: a deadline on every call, 429 respecting Retry-After, and
+           one module owning the provider's shapes.`,
+    refs:[] },
+
   { id:"receiving-webhooks", name:"Receiving webhooks", depth:"build", core:true,
-    why:`Not yet rewritten in the new format.` },
+    why:`A webhook endpoint is a public URL anyone can call. The signature is the only thing separating
+         a genuine delivery from an attacker's, so the verification has to be exactly right.`,
+    code:[{label:"Express: verify over the RAW bytes, before parsing", lang:"js", code:`// Raw body for this route only — the global JSON parser would consume it.
+app.post('/webhooks/stripe', express.raw({ type: 'application/json' }),
+  async (req, res) => {
+    const ts  = Number(req.get('X-Timestamp'));
+    const sig = req.get('X-Signature');
+
+    if (Math.abs(Date.now() / 1000 - ts) > 300)        // replay window
+      return res.sendStatus(400);
+
+    const expected = crypto.createHmac('sha256', SECRET)
+      .update(\`\${ts}.\${req.body}\`).digest('hex');      // req.body is a Buffer
+    const a = Buffer.from(expected), b = Buffer.from(sig);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b))
+      return res.sendStatus(400);                      // constant time
+
+    const event = JSON.parse(req.body);                // parse AFTER
+    await inbox.record(event.id, event);               // dedupe + queue
+    res.sendStatus(200);                               // ack FAST
+  });`},
+           {label:"Why the raw body matters — three differences in one payload", lang:"text", code:`raw bytes as received     : accepted
+parsed then re-serialised : rejected: signature mismatch
+
+  on the wire : "{\\n  \\"id\\": \\"evt_1\\",\\n  \\"amount\\": 4999.0,
+                 \\n  \\"note\\": \\"caf\\u00e9\\"\\n}"
+  recreated   : "{\\"id\\":\\"evt_1\\",\\"amount\\":4999,\\"note\\":\\"café\\"}"
+
+Whitespace removed, 4999.0 became 4999, and the \\u00e9 escape became
+a literal character. Any one of them breaks the signature.`}],
+    points:[
+      `Providers time out in seconds and retry. Verify, persist, return 200, and do the work in a job.`,
+      `Delivery is at-least-once, so dedupe on the provider's event id exactly as the messaging stage describes.`,
+      `Use the library's timing-safe comparison. Ordinary string equality leaks timing information.`,
+      `The timestamp must be inside the signed material, or a captured request can be replayed later.`],
+    trap:`Letting the framework's JSON middleware consume the body first. You then verify against a
+          reconstruction, genuine deliveries fail for reasons that look random, and the fix applied under
+          pressure is to stop verifying.`,
+    build:`Send three requests: valid, one byte altered, and valid with a ten-minute-old timestamp.
+           Accept, reject, reject. Then send the same valid delivery twice and confirm one effect.`,
+    refs:[] },
+
   { id:"sending-webhooks", name:"Sending webhooks", depth:"build", core:false,
-    why:`Not yet rewritten in the new format.` }
+    why:`You are now somebody's unreliable dependency — and the URL is attacker-chosen, which makes this
+         an SSRF surface before it is a delivery feature.`,
+    code:[{label:"Guard registration AND every delivery", lang:"js", code:`async function assertPublic(url) {
+  const u = new URL(url);
+  if (u.protocol !== 'https:') throw new Err('HTTPS_REQUIRED');
+  const { address } = await dns.lookup(u.hostname);      // resolve it
+  if (isPrivate(address)) throw new Err('PRIVATE_ADDRESS'); // 10/8, 127/8,
+  return u;                                               // 169.254/16, ::1
+}
+
+async function deliver(sub, event) {
+  await assertPublic(sub.url);          // RE-CHECK: DNS can change between
+                                        // registration and delivery
+  const ts   = Math.floor(Date.now() / 1000);
+  const body = JSON.stringify(event);
+  const sig  = hmac(sub.secret, \`\${ts}.\${body}\`);
+
+  const r = await fetch(sub.url, { method: 'POST', body,
+    redirect: 'manual',                 // a redirect is a NEW url
+    signal: AbortSignal.timeout(10_000),
+    headers: { 'X-Signature': sig, 'X-Timestamp': String(ts),
+               'X-Event-Id': event.id } });
+
+  await logAttempt(sub, event, r.status, (await r.text()).slice(0, 1000));
+  if (r.status >= 300) await scheduleRetry(sub, event, backoff(attempt));
+  if (await consecutiveFailures(sub) > 100) await disable(sub);
+}`}],
+    points:[
+      `Re-resolve before every delivery. A hostname that was public at registration can point at a private address later.`,
+      `Give subscribers the two things they always ask for: a signature they can verify, and a delivery log they can read.`,
+      `Deliver from a worker pool with per-subscription concurrency, so one slow receiver does not consume your capacity.`,
+      `Disable an endpoint failing for days and tell the owner, or you spend capacity calling a dead URL forever.`],
+    trade:`Ordered delivery per subscriber means one in-flight request at a time for them. Most providers
+           choose unordered and document it, because ordered delivery over an unreliable receiver is a
+           promise you cannot keep.`,
+    trap:`Recording response bodies in a log the subscriber can read, without restricting which addresses
+          you call. That combination turns the delivery log into a window onto your internal network —
+          which is the metadata-endpoint attack.`,
+    build:`Try to register a webhook at <code>http://localhost</code>, at a private address, and at a
+           public hostname whose DNS you then repoint privately. All three should be refused.`,
+    refs:[["OWASP: SSRF prevention","https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html"]] }
+
   ] },
 
 { num:12, id:"reliability", phase:5, name:"Reliability and fault tolerance",
