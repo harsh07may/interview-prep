@@ -12,7 +12,7 @@ Interview preparation tracks plus a landing page, served as a static site on Git
 | `aspnet-core/index.html` | ASP.NET Core track, 8 topics, about 180 questions | `aspnet:level:v1` (selected level filter) |
 | `react-typescript/index.html` | React and TypeScript track: 10 topics, 154 questions, same data-driven format as ASP.NET Core | `react:level:v1` (selected level filter) |
 | `dsa/index.html` | DSA patterns track: 7 stages, 25 patterns, 285 problems, Python | `dsa:done:v1` (array of solved problem slugs) |
-| `backend/index.html` | Backend engineering route: 15 stages, 101 topics, plus a capstone spec. A learning route, not a question bank | `backend:done:v1` (ticked topic ids), `backend:filter:v1` (toolbar filter) |
+| `backend/index.html` | Backend engineering route: 15 stages, 101 topics, plus a capstone. A docs-style learning route in Node and Express, not a question bank | `backend:done:v1` (ticked topic ids), `backend:theme:v1` (theme override) |
 | `README.md` | Public description | |
 | `.nojekyll` | Tells GitHub Pages to serve files as-is. Do not delete. | |
 
@@ -74,77 +74,99 @@ Content is data, not markup. The script at the bottom of each track declares one
 
 ## How the backend route works
 
-`backend/index.html` is data-driven like the ASP.NET Core page, but it renders a
-different card and is a **learning route rather than a question bank**. It was
-copied from `react-typescript/index.html`, recoloured teal, and had its renderer
-replaced. Keep that distinction when editing: it has no levels, no follow-ups
-and no traps, and adding them would make it a fourth question bank.
+`backend/index.html` is a **learning route, not a question bank**. Unlike the
+other three tracks it has no levels, no follow-ups and no traps, and it does not
+hide anything behind a disclosure: the sidebar is the navigation and the content
+is always visible. Adding question-bank features to it would defeat the point.
+
+### Page structure
+
+It is a small documentation site in one file, modelled on how docs sites lay
+this out:
+
+- A sticky top bar: breadcrumb, search, progress count, theme toggle, and on
+  phones a menu button.
+- `.shell` is a three-column grid: `#side` (stage and topic nav), `#main`
+  (content), `#toc` (on-this-page, with an IntersectionObserver scroll-spy).
+  The toc drops below 1180px; the sidebar becomes a drawer below 860px.
+- **One stage renders at a time.** `showStage()` replaces `#main`, and the hash
+  is the route: `#apis` selects a stage, `#idempotency` selects the stage
+  containing that topic and scrolls to it.
+- Because one stage at a time breaks Ctrl-F, there is a real search over all
+  topics. `/` focuses it; Escape clears it.
 
 ### Data shape
 
-One `stages` array. Every stage has `num`, `id`, `phase`, `name`, `intro`, and
-either `topics` or `custom`, plus optional `after` and `sources`.
+One `stages` array. A stage has `num`, `id`, `phase`, `name`, `lede`, and either
+`topics` or `custom`. `phase` indexes into `PHASES` for the sidebar headings.
 
 ```js
-{ id:"idempotency",                    // anchor AND progress key: never rename
+{ id:"idempotency",                   // anchor AND progress key: never rename
   name:"Idempotency and safe retries",
-  depth:"build",                       // "understand" | "build"  (required)
-  core:true,                           // part of the 46-topic spine
-  line:"One line shown on the closed card.",
-  what:`<p>HTML.</p>`,                     // required
-  use:`<p>HTML, one concrete case.</p>`,   // required
-  concepts:[ ["Term","One sentence."] ],   // required, 3 or more pairs
-  how:`<p>HTML.</p>`,                      // required
-  code:[ {label:"Node", lang:"js", code:`raw, unescaped`} ],   // optional array
-  tradeoff:`<p>HTML.</p>`,             // optional
-  pitfall:"Plain text.",               // optional
-  exercise:`<p>HTML.</p>`,             // optional
-  refs:[ ["Label","https://..."] ] }   // optional; an empty array renders nothing
+  depth:"build",                      // "understand" | "build"  (required)
+  core:true,                          // part of the 46-topic spine
+  why:`Two sentences. HTML.`,                       // required
+  code:[ {label:"Express: ...", lang:"js", code:`raw`} ],   // optional array
+  points:[ `One line. HTML.` ],       // required, 3 or more
+  trade:`One line. HTML.`,            // optional
+  trap:`One line. HTML.`,             // optional
+  build:`One line exercise. HTML.`,   // optional
+  refs:[ ["Label","https://..."] ] }  // optional; empty array renders nothing
 ```
 
 - **Never rename a published `id`.** It is the anchor and the `backend:done:v1`
-  progress key, so renaming silently discards a reader's ticks.
+  progress key, so renaming silently discards a reader's ticks. The ids survived
+  the 2026-11 redesign for exactly this reason.
 - `code` entries are inserted with `textContent`, so snippet source is raw.
-  Everything in `what`, `use`, `how`, `tradeoff` and `exercise` is HTML and must
-  escape `<`, `>` and `&`.
-- `core` and `depth` are independent axes. The toolbar filters are All topics,
-  Core only, Build and Understand.
-- The capstone is a `custom` stage with no `topics`, so it renders as prose with
-  no tick boxes and an empty stage-progress line.
+  Everything else is HTML and must escape `<`, `>` and `&`.
+- `core` and `depth` are labels shown as pills, not filters. The old
+  `backend:filter:v1` key is no longer written.
+
+### Writing content
+
+Target **about 150 words of prose per topic**, plus code. The route is 101
+topics; at 500 words each nobody reads it. The shape is deliberately fixed:
+two sentences of why, then the code, then four one-line points, then one-line
+trade-off, pitfall and exercise bands. Code carries the teaching and the prose
+points at it.
+
+**Node and Express only.** SQL, YAML, Dockerfile and nginx config stay as
+themselves, because they are not language choices. Do not reintroduce C# or
+language-neutral pseudocode.
 
 ### Writing snippets
 
-Three escaping mistakes each cost a rebuild while this page was written, so
-check a stage on its own before inserting it:
+Four escaping mistakes have each cost a rebuild. Always syntax-check a stage on
+its own before inserting it — `node --check` on `const s = <literal>;` — which
+catches all of them:
 
-1. A shell line continuation (a lone backslash at end of line) inside a JS
-   template literal is an escape and silently joins the two lines. Double it.
+1. A lone backslash at end of line inside a template literal is an escape and
+   silently joins two lines. Double it.
 2. A double quote inside a double-quoted string ends it. Use `&quot;` in prose.
-3. A backtick in pseudocode ends the template literal. Remove it.
+3. A backtick inside a snippet ends the template literal. Escape it as ``\` ``.
+4. `${...}` inside a snippet interpolates. Escape it as `\${`.
 
-`langFor()` maps `js`, `cs`, `sql`, `yaml`, `bash` and `json`. Anything else,
-including `dockerfile`, `nginx`, `text` and unlabelled pseudocode, renders
-unhighlighted on purpose: highlight.js 11.9.0's common bundle does not carry the
-first two, and mis-highlighted pseudocode reads worse than none. Keep snippet
-lines to 92 characters, or they scroll sideways on the page.
+`highlight()` maps `js`, `sql`, `yaml`, `bash` and `json`. Anything else —
+`text`, `dockerfile`, `nginx` — renders unhighlighted on purpose. Keep snippet
+lines to **88 characters**: the content column is narrower than the old layout.
 
-### Adding a stage
+### Adding or editing a stage
 
-1. Write the stage object as a standalone `{ ... }` literal in its own file.
-2. Syntax-check it alone (`node --check` on `const stage = <literal>;`) before
-   inserting, so a broken stage never reaches the page.
-3. Append it to `stages` before the closing `];`.
-4. Run the checks below, then open the page.
+1. Write the stage as a standalone `{ ... }` literal.
+2. Syntax-check it alone before inserting, so a broken stage never reaches the
+   page.
+3. Splice it into `stages`.
+4. Run the checks below, then open the page at that stage's hash.
 
 ### Content rules specific to this route
 
 - Every claim that can be run should be run, and the snippet should carry its
-  real output. Several topics here were rewritten because testing contradicted
-  the conventional advice: a wrongly ordered index does not stop Postgres using
-  the index, and a current JWT library rejects both `alg:none` and algorithm
+  real output. Several topics were rewritten because testing contradicted the
+  conventional advice: a wrongly ordered index does not stop Postgres using the
+  index, and a current JWT library rejects both `alg:none` and algorithm
   confusion while happily accepting a token minted for another audience.
-- Where a snippet could not be verified in the authoring environment, the
-  stage's `sources` says so explicitly.
+- Where a snippet could not be verified in the authoring environment, say so in
+  the topic.
 - Topics that argue against their own subject are deliberate, not hedging:
   distributed locks, sagas, event sourcing, contract testing and sharding all
   open by saying when not to use them.
@@ -219,11 +241,10 @@ const fs=require("fs"), s=fs.readFileSync("backend/index.html","utf8");
 const m=s.match(/<script>([\s\S]*?)<\/script>/)[1];
 const lit=m.slice(m.indexOf("const stages"), m.indexOf("const DEPTH"));
 const stages=new Function(lit+"; return stages;")();
-let n=0, todo=0, bad=[];
+let n=0, bad=[];
 for (const st of stages) {
   if (!st.lede) bad.push("stage "+st.id+": missing lede");
   for (const t of st.topics||[]) { n++;
-    if (/Not yet rewritten/.test(t.why||"")) { todo++; continue; }
     for (const f of ["id","name","depth","why"]) if (!t[f]) bad.push(t.id+": missing "+f);
     if (!["understand","build"].includes(t.depth)) bad.push(t.id+": bad depth");
     if (!t.points || t.points.length < 3) bad.push(t.id+": needs 3+ points");
@@ -233,7 +254,7 @@ for (const st of stages) {
     }
   }
 }
-console.log("topics:", n, " still to rewrite:", todo);
+console.log("topics:", n);
 if (bad.length) { console.error(bad.join("\n")); process.exit(1); }
 console.log("fields ok");'
 
@@ -247,7 +268,7 @@ grep -rn "claude.ai/artifact" --include=*.html --include=*.md \
 python3 -m http.server 8000
 ```
 
-Then check by eye: every topic renders, the level filter and "Open all answers" work, the backend route's four filters work and its ticks and DSA ticks survive a reload, light and dark mode, and a phone-width window. A runtime error (for example an undefined source constant) leaves the page empty below the toolbar, so always open the page after editing.
+Then check by eye: every topic renders, the level filter and "Open all answers" work on the question-bank tracks, the backend route's sidebar navigation, search and scroll-spy work and its ticks and DSA ticks survive a reload, light and dark mode, and a phone-width window. A runtime error (for example an undefined source constant) leaves the page empty below the toolbar, so always open the page after editing.
 
 ## Publishing
 
