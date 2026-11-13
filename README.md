@@ -33,10 +33,11 @@ Interview preparation tracks with answers you can say out loud, the follow-ups t
 
 **Backend engineering**
 - A learning route, not interview questions. Fifteen stages in order, each assuming the ones before it, then a capstone.
-- Every topic has the same parts: what it is and why, a concrete case, core concepts, how to build it, the trade-offs, the pitfall people hit, and an exercise.
-- Filter to **Core only** for the spine of the route, or to **Build** and **Understand** to separate what you should be able to implement from what you should know the trade-off for.
-- Tick topics off as you build or can explain them. The capstone composes the exercises into one order service with eight milestones, each with a check you can run.
-- Code is pseudocode unless a snippet is labelled with a language. Real snippets are Node, with C# where a second language helps, plus real SQL, YAML, Dockerfile and nginx config.
+- Laid out like a documentation site: the sidebar is the navigation, one stage shows at a time, and nothing is collapsed. Search covers all 101 topics; press `/` to focus it.
+- Every topic is the same shape: two sentences on why it matters, a code example, four one-line points, and one-line trade-off, pitfall and exercise notes. About 150 words plus code, so you can actually read 101 of them.
+- Each topic is labelled **Core** (the 46-topic spine), and **Build** or **Understand** — what you should be able to implement yourself versus what you should know the trade-off for.
+- Tick topics off as you go. The capstone composes the exercises into one order service in eight milestones, each with a check you can run.
+- **Node and Express throughout**, plus real SQL, YAML, Dockerfile and nginx config where those are the actual artifact.
 
 Your level filters and solved problems are saved in your browser's `localStorage` and never leave your machine.
 
@@ -56,4 +57,4 @@ Each track is one self-contained HTML file with no build step. Fonts load from G
 
 Framework details target .NET 8 and .NET 10 and were written in September 2026. The DSA sheet's Python was tested on Python 3.12: templates were run, and key insights were checked against brute-force solutions on random inputs. React and TypeScript targets React 19 and TypeScript 5.x. Documentation sites were not reachable while it was written, so only a few React claims are backed by documentation excerpts; every source label says which. Company-specific attributions come from public interview write-ups and are labelled as reported, not verified.
 
-The backend engineering route was written in November 2026. Its SQL was run against PostgreSQL 16 and its JavaScript against Node 22, both inside the authoring container, and the outputs quoted in the snippets are the real ones. Where a snippet could not be run there, the Dockerfile and the Kubernetes manifests among them, the page says so. Each stage's sources section separates pages that were actually retrieved from references that were not.
+The backend engineering route was written in November 2026 and redesigned later that month. Its SQL was run against PostgreSQL 16 and its JavaScript against Node 22, both inside the authoring container, and the outputs quoted in the snippets are the real ones. Where a snippet could not be run there, the Dockerfile and the Kubernetes manifests among them, the page says so. Each stage's sources section separates pages that were actually retrieved from references that were not.
