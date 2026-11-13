@@ -470,39 +470,446 @@ app.post('/upload', (req, res) => {
   ] },
 
 { num:2, id:"network", phase:1, name:"Networking and the edge",
-  lede:"Not yet rewritten.",
+  lede:"What sits between the internet and your process, and what it costs to get through it.",
   topics:[
-  { id:"tls-certs", name:"TLS, certificates and where encryption ends", depth:"understand", core:true,
-    why:`Not yet rewritten in the new format.` },
-  { id:"connections", name:"Connections: keep-alive, pooling and HTTP/2 multiplexing", depth:"build", core:true,
-    why:`Not yet rewritten in the new format.` },
-  { id:"reverse-proxy", name:"Reverse proxies and load balancers at the edge", depth:"build", core:false,
-    why:`Not yet rewritten in the new format.` },
-  { id:"realtime", name:"Real-time: WebSockets, SSE and long polling", depth:"understand", core:false,
-    why:`Not yet rewritten in the new format.` }
+
+  { id:"tls-certs", name:"TLS and certificate chains", depth:"understand", core:true,
+    why:`TLS costs a round trip on top of TCP, and it usually ends at your edge, so traffic behind the
+         proxy is often plaintext. The part that actually breaks is the chain.`,
+    code:[{label:"Read what the server really sends", lang:"bash", code:`HOST=api.example.com
+peek() {
+  openssl s_client -connect "$HOST:443" -servername "$HOST" "$@" </dev/null 2>/dev/null
+}
+
+peek | openssl x509 -noout -subject -dates
+# subject=CN = api.example.com
+# notBefore=Nov 12 07:33:25 2026 GMT
+# notAfter=Feb 10 07:33:25 2027 GMT
+
+peek -showcerts | grep -c 'BEGIN CERTIFICATE'
+# 1  <- only the leaf. Browsers paper over this; most clients will not.`}],
+    points:[
+      `The server must send the leaf <b>and</b> the intermediates. Only the root is expected to be already trusted.`,
+      `Browsers cache intermediates and can fetch missing ones, so "it works in my browser" proves nothing about an API client.`,
+      `TLS terminates at the load balancer. Your app sees plain HTTP and the proxy's address, not the client's.`,
+      `Certificates are short-lived now. A renewal that is not automated is an outage with a date on it.`],
+    trap:`Debugging a certificate error from a browser. It is the most forgiving client you have, and it
+          will succeed against a server every other client rejects.`,
+    build:`Run both commands against a service you own. If the count is 1, you have the incomplete-chain
+           bug waiting for its first non-browser client.`,
+    refs:[["RFC 8446: TLS 1.3","https://www.rfc-editor.org/rfc/rfc8446.html"]] },
+
+  { id:"connections", name:"Connection reuse", depth:"build", core:true,
+    why:`Opening a connection costs a TCP handshake and a TLS handshake. Reusing one costs nothing, and
+         the usual way to lose reuse is creating an HTTP client inside the request handler.`,
+    code:[{label:"Measured over loopback, no TLS, no latency", lang:"js", code:`const http = require('node:http');
+
+// 200 sequential GETs, no keep-alive
+const fresh = new http.Agent({ keepAlive: false });
+// 200 sequential GETs, one reused socket
+const kept  = new http.Agent({ keepAlive: true, maxSockets: 1 });
+
+// no keep-alive: 152ms over 200 connections
+// keep-alive:     44ms over 1 connection
+
+// One client per upstream, built once at startup:
+const agent = new http.Agent({ keepAlive: true, maxSockets: 20 });
+async function callPayments(path, body) {
+  return fetch(\`https://payments.internal\${path}\`, {
+    method: 'POST', body: JSON.stringify(body),
+    signal: AbortSignal.timeout(2000),        // always a deadline
+    dispatcher: undefined,                     // undici: set a shared Agent
+  });
+}`}],
+    points:[
+      `That 3.5x is over loopback with no TLS and no network latency, so it badly understates the real gain.`,
+      `Pool size is a concurrency limit. Twenty per instance across ten instances is two hundred at the upstream.`,
+      `On HTTP/1.1 one connection handles one request at a time; HTTP/2 multiplexes many over one. Domain sharding is now an anti-pattern.`,
+      `A long-lived connection pins the address it resolved, so recycle connections periodically or a DNS failover goes unnoticed.`],
+    trap:`Constructing the HTTP client inside the handler. It looks tidy, passes every test, and throws
+          away the pool on every call.`,
+    build:`Find every place your service builds an HTTP client and check it happens once. Time one
+           outbound call fresh versus reused.`,
+    refs:[["RFC 9113: HTTP/2","https://www.rfc-editor.org/rfc/rfc9113.html"]] },
+
+  { id:"reverse-proxy", name:"The edge: proxies and load balancers", depth:"build", core:false,
+    why:`Something sits in front of your service, terminating TLS and applying its own timeouts and
+         size limits. When its limits disagree with yours, the proxy wins.`,
+    code:[{label:"nginx: the settings that bite", lang:"nginx", code:`http {
+  set_real_ip_from  10.0.0.0/8;      # trust forwarded headers ONLY from
+  real_ip_header    X-Forwarded-For; # addresses that are really proxies
+  real_ip_recursive on;
+
+  upstream orders { server 10.0.1.11:8080; keepalive 32; }
+
+  server {
+    listen 443 ssl;
+    client_max_body_size 20m;        # default is 1m: the silent 413
+
+    location / {
+      proxy_pass http://orders;
+      proxy_http_version 1.1;        # required for upstream keep-alive
+      proxy_set_header Connection "";
+
+      proxy_set_header Host              $host;
+      proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+
+      proxy_connect_timeout 2s;
+      proxy_read_timeout   10s;      # exceeded -> 504
+    }
+  }
+}`}],
+    points:[
+      `<b>502</b> the backend gave something unusable, <b>503</b> nothing healthy to send to, <b>504</b> the backend did not answer in time. Each points at a different layer.`,
+      `Without <code>X-Forwarded-Proto</code>, Express builds <code>http://</code> redirects for an HTTPS site. Set <code>app.set('trust proxy', 1)</code> to read them.`,
+      `Make the edge timeout <em>longer</em> than the app's, so your own error with your own request id is what a client sees.`,
+      `Body size needs a limit at both layers, and the smaller applies.`],
+    trap:`Trusting <code>X-Forwarded-For</code> unconditionally. It is a plain header, so anything keyed on
+          client address — rate limits, bans, audit logs — becomes trivially spoofable.`,
+    build:`Write down four numbers from your edge config: max body size, connect timeout, read timeout,
+           and which addresses may set forwarded headers. Compare each with your app's.`,
+    refs:[["RFC 7239: Forwarded","https://www.rfc-editor.org/rfc/rfc7239.html"],
+          ["nginx proxy module","https://nginx.org/en/docs/http/ngx_http_proxy_module.html"]] },
+
+  { id:"realtime", name:"Pushing to a client", depth:"understand", core:false,
+    why:`Three ways to send something the client did not ask for: poll, hold a response open (SSE), or
+         upgrade to a socket. The fashionable one is the expensive one.`,
+    code:[{label:"Express: server-sent events in twenty lines", lang:"js", code:`app.get('/orders/:id/events', (req, res) => {
+  res.writeHead(200, {
+    'Content-Type':  'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',   // no-transform: proxies
+    'Connection':    'keep-alive',               // must not buffer this
+  });
+  res.flushHeaders();
+
+  const send = (e) => res.write(\`id: \${e.id}\\ndata: \${JSON.stringify(e)}\\n\\n\`);
+  const beat = setInterval(() => res.write(': ping\\n\\n'), 15000);  // detect death
+
+  bus.subscribe(req.params.id, send);            // shared pub/sub, not local
+  req.on('close', () => { clearInterval(beat); bus.unsubscribe(req.params.id, send); });
+});`}],
+    points:[
+      `<b>SSE</b> is plain HTTP, so your proxy, auth and logging keep working, and the browser reconnects for you with <code>Last-Event-ID</code>.`,
+      `<b>WebSockets</b> are for when the client also streams: chat, collaborative editing, games. One direction does not need them.`,
+      `Any held connection pins a client to one instance, so pushing means reaching that instance through shared pub/sub.`,
+      `Heartbeats are not optional. A dropped connection frequently looks open to both ends.`],
+    trade:`Reach for SSE first. WebSockets buy a second direction and cost you stateful edge connections,
+           which show up as a thundering reconnect on every rolling deploy.`,
+    trap:`Choosing WebSockets for a feature that only pushes one way, then meeting the reconnect storm
+          during your first deploy.`,
+    build:`Build order-status updates twice, once with a three-second poll and once with SSE. Compare
+           requests per minute for ten idle clients, then make it work across two instances.`,
+    refs:[["MDN: server-sent events","https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events"]] }
+
   ] },
 
 { num:3, id:"apis", phase:2, name:"Designing APIs",
-  lede:"Not yet rewritten.",
+  lede:"The decisions that are cheap now and expensive once someone depends on them.",
   topics:[
-  { id:"resource-modelling", name:"Resource modelling and URL design", depth:"build", core:true,
-    why:`Not yet rewritten in the new format.` },
+
+  { id:"resource-modelling", name:"Resources and URLs", depth:"build", core:true,
+    why:`Name things, not actions, and let the method carry the verb. Someone who has used two of your
+         endpoints should be able to guess the third.`,
+    code:[{label:"A surface you can guess", lang:"text", code:`GET    /orders?status=paid&limit=20     list, filtered
+POST   /orders                          create
+GET    /orders/{id}                     read one
+PATCH  /orders/{id}                     change some fields
+DELETE /orders/{id}                     remove
+GET    /customers/{id}/orders           scoped by owner
+POST   /orders/{id}/cancel              a real action, not CRUD
+
+Avoid:
+GET    /getOrder?id=7     verb in the path
+POST   /orders/7/delete   the method already means this
+GET    /orders/paid       implies a resource called "paid"; use ?status=
+GET    /Orders/7          casing you will mistype forever`}],
+    points:[
+      `Path <b>identifies</b>, query string <b>narrows</b>. <code>/orders?status=paid</code> filters; <code>/orders/paid</code> is a lie you have to maintain.`,
+      `Nest one level to express ownership. Past that the URL is carrying relationships that belong in query parameters.`,
+      `Cancel, refund and retry are real operations. <code>POST /orders/{id}/cancel</code> is honest; bending it into a PATCH is usually worse.`,
+      `Whatever is in the URL is public and permanent.`],
+    trap:`Exposing the auto-incrementing primary key. It tells any caller how many orders you have and
+          how fast you are growing, and makes guessing a neighbour's id trivial.`,
+    build:`List your endpoints and mark each resource-shaped or action-shaped. Check whether any id in a
+           URL is a sequential integer.`,
+    refs:[] },
+
   { id:"validation", name:"Validation at the boundary", depth:"build", core:true,
-    why:`Not yet rewritten in the new format.` },
-  { id:"error-model", name:"Error model design", depth:"build", core:true,
-    why:`Not yet rewritten in the new format.` },
-  { id:"collections", name:"Collection endpoints: pagination, filtering and sorting", depth:"build", core:true,
-    why:`Not yet rewritten in the new format.` },
-  { id:"versioning", name:"Versioning and backward compatibility", depth:"build", core:false,
-    why:`Not yet rewritten in the new format.` },
+    why:`Reject bad input once, at the edge, so every layer behind it can assume values are present,
+         typed and in range. Scattered checks mean some will be forgotten.`,
+    code:[{label:"Express + Zod: parse, do not check", lang:"js", code:`const { z } = require('zod');
+
+const CreateOrder = z.object({
+  customerId: z.number().int().positive(),
+  currency:   z.enum(['INR', 'USD', 'EUR']),
+  items: z.array(z.object({
+    sku: z.string().regex(/^[A-Z]{1,4}-\\d{1,6}$/),
+    qty: z.number().int().min(1).max(999),
+  })).min(1).max(50),
+  note: z.string().max(500).optional(),
+}).strict();                       // reject unknown fields: catches typos
+
+function validate(schema) {
+  return (req, res, next) => {
+    const r = schema.safeParse(req.body);
+    if (!r.success) return res.status(422).json({
+      code: 'VALIDATION_FAILED',
+      errors: r.error.issues.map((i) => ({      // ALL of them, not the first
+        field: i.path.join('.'), code: i.code, message: i.message })),
+    });
+    req.valid = r.data;             // typed, bounded, safe from here on
+    next();
+  };
+}
+
+app.post('/orders', validate(CreateOrder), handler);`}],
+    points:[
+      `Return <b>every</b> error at once. A client fixing a form one field per round trip is an experience you created.`,
+      `<code>.strict()</code> turns a misspelt field into a rejection instead of a silently missing value.`,
+      `Bound every string, array and number. An absent limit is a denial of service waiting to be found.`,
+      `Validation is not authorization. A well-formed request from someone who may not make it is still valid input.`],
+    trap:`Validating in the route and again in the service, slightly differently. Behaviour then depends
+          on which path the call came through.`,
+    build:`Add a strict schema to one endpoint and send it four bad requests: missing field, wrong type,
+           out of range, misspelt name. None should reach your logic.`,
+    refs:[["Zod","https://zod.dev/"]] },
+
+  { id:"error-model", name:"One error shape", depth:"build", core:true,
+    why:`Errors are used more than the happy path once clients are in production. One envelope with a
+         stable code means a client writes one error handler and can branch on the specific problem.`,
+    code:[{label:"Express: one envelope, including for crashes", lang:"js", code:`class AppError extends Error {
+  constructor(code, status, detail) {
+    super(code);
+    Object.assign(this, { code, status, detail });
+  }
+}
+
+// Must be last, and must take four arguments or Express ignores it.
+app.use((err, req, res, next) => {
+  if (err instanceof AppError) {
+    req.log.info({ code: err.code }, 'domain error');
+    return res.status(err.status).json({
+      code: err.code, detail: err.detail, requestId: req.id });
+  }
+  req.log.error({ err }, 'unhandled');          // full stack to the log
+  res.status(500).json({ code: 'INTERNAL', requestId: req.id });
+});                                             // no stack to the client
+
+// { "code": "CARD_DECLINED", "detail": "The issuing bank declined this card.",
+//   "requestId": "01J9F0G7Q0X3", "retryable": false }`}],
+    points:[
+      `The <code>code</code> is API surface. Once a client branches on it, changing it is a breaking change.`,
+      `Echo the request id in every error. It turns a vague support report into an exact log query.`,
+      `Catch the framework's default error page too, or unhandled exceptions escape in a different shape with a stack in it.`,
+      `Field errors belong in an <code>errors</code> array so a form can mark every bad input at once.`],
+    trade:`Detail helps clients and helps attackers. Be specific on business errors the caller owns, and
+           deliberately vague on anything touching authentication or another tenant's data.`,
+    trap:`Letting the default error handler through. Client error handling breaks exactly when something
+          has already gone wrong.`,
+    build:`Trigger four failures — validation, missing, unauthorised, and a deliberate crash — and
+           compare the four bodies. They should be the same shape.`,
+    refs:[["RFC 9457: Problem Details","https://www.rfc-editor.org/rfc/rfc9457.html"]] },
+
+  { id:"collections", name:"Pagination that does not duplicate", depth:"build", core:true,
+    why:`Offset pagination quietly repeats and skips rows whenever the data changes while a client is
+         reading it. Keyset pagination does not, and stays fast at any depth.`,
+    code:[{label:"Reproduced on Postgres 16, 10 rows, page size 3", lang:"text", code:`OFFSET                            KEYSET (cursor = last row of page 1)
+page 1 -> 10, 9, 8                page 1 -> 10, 9, 8
+  a new row arrives at the top      a new row arrives at the top
+page 2 -> 8, 7, 6                 page 2 -> 7, 6, 5
+          ^ row 8 returned twice            nothing repeated
+
+An insert above the cursor duplicates a row; a delete above it skips one.`},
+           {label:"The query, and the index it needs", lang:"sql", code:`create index on orders (created_at desc, id desc);
+
+-- Page 2: everything strictly after the last row of page 1. The row-value
+-- comparison is what lets one composite index serve the whole thing.
+select id, created_at from orders
+where (created_at, id) < ($1, $2)
+order by created_at desc, id desc
+limit $3;`}],
+    points:[
+      `The <b>tiebreaker</b> is mandatory. Two rows sharing a timestamp make the cursor ambiguous, and ties can order differently between queries.`,
+      `Encode the cursor so the format stays yours to change and clients cannot hand-craft one.`,
+      `Offset also gets slower with depth: the database walks and discards every skipped row.`,
+      `Filter and sort fields are an allowlist. A sort on an unindexed column is a table scan any caller can trigger.`],
+    trade:`Offset is fine for static data where someone genuinely needs to jump to page 50. Keyset is for
+           anything live, deep, or walked end to end.`,
+    trap:`Sorting by a non-unique column with no tiebreaker. Rows can be skipped or repeated even with no
+          writes at all.`,
+    build:`Walk a 10,000-row list to the end while another process inserts at the top. Assert no
+           duplicate ids. Then do it with OFFSET and count them.`,
+    refs:[] },
+
+  { id:"versioning", name:"Changing an API safely", depth:"build", core:false,
+    why:`Most changes need no version. The ones that do need a plan for retiring the old one, which is
+         the part that never happens.`,
+    code:[{label:"Renaming a field across three releases", lang:"text", code:`Release 1  respond with  name AND full_name
+           accept        either
+           log           every read of "name", with the client id
+           docs          mark name deprecated, give a removal date
+
+Release 2  logs show zero reads of name for 30 days
+           stop accepting name on write, keep returning it
+
+Release 3  stop returning name, drop the column
+
+The logging is the whole point. Without it you are guessing about
+clients you cannot see, and the answer is usually "two you forgot".`}],
+    points:[
+      `<b>Safe:</b> adding an optional field, adding an endpoint, adding an enum value clients can ignore.`,
+      `<b>Breaking:</b> removing, renaming, narrowing a type — and changing the <em>meaning</em> of a value, which is the dangerous one because nothing fails.`,
+      `Version the whole API, not individual endpoints, so a client has one thing to track.`,
+      `Instrument from day one. You cannot retire what you cannot measure.`],
+    trade:`A version in the path is obvious in logs and easy to pin. A header is tidier and easier to
+           forget, and a client that forgets gets whatever default you chose.`,
+    trap:`Changing what a field means rather than its name. Every client keeps parsing it happily and
+          every client is now wrong.`,
+    build:`Pick a field you would like to rename, write the three-release plan, and add the logging. Look
+           at it after a week.`,
+    refs:[["RFC 8594: Sunset header","https://www.rfc-editor.org/rfc/rfc8594.html"]] },
+
   { id:"idempotency", name:"Idempotency and safe retries", depth:"build", core:true,
-    why:`Not yet rewritten in the new format.` },
-  { id:"rate-limiting", name:"Rate limiting and quotas", depth:"build", core:false,
-    why:`Not yet rewritten in the new format.` },
-  { id:"api-style", name:"Choosing an API style: REST, gRPC and GraphQL", depth:"understand", core:false,
-    why:`Not yet rewritten in the new format.` },
-  { id:"openapi", name:"OpenAPI that stays true", depth:"build", core:false,
-    why:`Not yet rewritten in the new format.` }
+    why:`A client that times out cannot tell "never arrived" from "succeeded, response lost", so it
+         retries — and a POST creates a second order. The key names the attempt, not the request.`,
+    code:[{label:"Postgres: the unique constraint IS the check", lang:"sql", code:`create table idempotency_keys (
+  key           text        primary key,
+  user_id       bigint      not null,
+  request_hash  text        not null,
+  state         text        not null default 'in_progress'
+                check (state in ('in_progress','done')),
+  response_code int,
+  response_body jsonb,
+  created_at    timestamptz not null default now()
+);
+
+-- Claim it. Returns a row ONLY for the attempt that won the race.
+insert into idempotency_keys (key, user_id, request_hash)
+values ($1, $2, $3)
+on conflict (key) do nothing
+returning key;`},
+           {label:"Express middleware: the three cases", lang:"js", code:`async function idempotent(req, res, next) {
+  const key = req.get('Idempotency-Key');
+  if (!key) return res.status(400).json({ code: 'IDEMPOTENCY_KEY_REQUIRED' });
+
+  const hash = sha256(req.method + req.path + canonical(req.body));
+  const won  = await db.claimKey(key, req.user.id, hash);
+
+  if (!won) {
+    const prior = await db.getKey(key);
+    if (prior.request_hash !== hash)                       // client bug
+      return res.status(422).json({ code: 'IDEMPOTENCY_KEY_REUSED' });
+    if (prior.state === 'in_progress')                     // still running
+      return res.status(409).json({ code: 'REQUEST_IN_PROGRESS' });
+    return res.status(prior.response_code).json(prior.response_body);
+  }
+  res.on('finish', () => db.completeKey(key, res.statusCode, res.locals.body));
+  next();
+}`}],
+    points:[
+      `Insert first, then check the result. <code>SELECT</code>-then-<code>INSERT</code> is a race, and it is the exact double-charge the key exists to prevent.`,
+      `Store the response you returned so a later retry replays it rather than recomputing.`,
+      `Same key with a different body means a client bug. Reject it, or you will return someone the wrong order.`,
+      `The concurrent retry is the hard case: the key exists but no response yet. Answer <code>409</code> and let the client come back.`],
+    trade:`Keep the key in the same database and transaction as the work, so the claim and the effect
+           commit together. In a separate store you have reintroduced a dual write.`,
+    trap:`Checking whether the key exists and then inserting it. Two concurrent retries both see no row
+          and both proceed.`,
+    build:`Send the same key twice <b>concurrently</b>, not sequentially. One order, two identical
+           responses. The sequential test passes against broken code.`,
+    refs:[["Idempotency-Key draft","https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/"]] },
+
+  { id:"rate-limiting", name:"Rate limiting", depth:"build", core:false,
+    why:`One caller's retry loop should not take the service down for everyone else. The counter has to
+         be shared and the check has to be atomic, or concurrent requests all read the same value.`,
+    code:[{label:"Redis 7: an atomic token bucket, run and measured", lang:"text", code:`-- KEYS[1] bucket   ARGV: capacity, refill_per_sec, now_ms, cost
+local cap, rate, now, cost = tonumber(ARGV[1]), tonumber(ARGV[2]),
+                             tonumber(ARGV[3]), tonumber(ARGV[4])
+local b      = redis.call('HMGET', KEYS[1], 'tokens', 'ts')
+local tokens = tonumber(b[1]) or cap
+local ts     = tonumber(b[2]) or now
+
+tokens = math.min(cap, tokens + (now - ts) / 1000 * rate)
+local allowed = 0
+if tokens >= cost then tokens, allowed = tokens - cost, 1 end
+
+redis.call('HSET', KEYS[1], 'tokens', tokens, 'ts', now)
+redis.call('PEXPIRE', KEYS[1], math.ceil(cap / rate * 1000) + 1000)
+return { allowed, math.floor(tokens), math.max(0, math.ceil((cost-tokens)/rate)) }
+
+-- capacity 5, refill 1/s, seven requests at once:
+-- 1 4 0 | 1 3 0 | 1 2 0 | 1 1 0 | 1 0 1 | 0 0 1 | 0 0 1`}],
+    points:[
+      `Lua runs as one unit, which is what makes read-modify-write safe. Without it, concurrent requests each read the same count.`,
+      `Key by API key or tenant. IP punishes everyone behind one NAT and is trivially spread across addresses.`,
+      `Answer <b>429</b> with <code>Retry-After</code> so a well-behaved client slows down instead of hammering.`,
+      `Per-instance counters mean the real limit is your limit times the instance count.`],
+    trade:`A local limiter is free and approximate, fine for abuse protection. A shared one is exact and
+           costs a round trip, which you need for a quota you bill against.`,
+    trap:`Returning 429 without <code>Retry-After</code>. The client retries immediately and your limiter
+          now generates more traffic than it blocks.`,
+    build:`Put it in front of one endpoint, fire a burst larger than the capacity, and check the number
+           allowed equals the bucket size — then run two instances and check it still does.`,
+    refs:[["Redis: EVAL","https://redis.io/docs/latest/commands/eval/"]] },
+
+  { id:"api-style", name:"REST, gRPC or GraphQL", depth:"understand", core:false,
+    why:`They optimise for different things and each carries a specific, well-known cost. Knowing the
+         costs is most of the decision.`,
+    code:[{label:"The GraphQL N+1, and the fix", lang:"text", code:`query { orders(last: 50) { id customer { name } } }
+
+Naive resolvers:
+  orders            -> 1 query
+  customer per row  -> 50 queries          total 51
+
+With a dataloader:
+  orders            -> 1 query
+  customer          -> collect all 50 ids during the tick, then
+                       one query: WHERE id IN (...)        total 2
+
+Looks fine in testing, where the list has three rows.`}],
+    points:[
+      `<b>REST</b>: cacheable by ordinary HTTP infrastructure, debuggable with curl, supported everywhere. Weak when one screen needs four resources.`,
+      `<b>gRPC</b>: a checked schema, generated clients, and deadlines propagated through the call chain. Awkward from a browser.`,
+      `<b>GraphQL</b>: the client shapes the response, and query cost becomes unbounded and set by the caller.`,
+      `Before shipping GraphQL: batch every relation resolver, cap depth and complexity, and turn off introspection if the schema is not public.`],
+    trade:`Default to REST for anything public. Use gRPC between services you own when both sides deploy
+           together. Use GraphQL when several clients genuinely need different data and someone will own
+           resolver performance.`,
+    trap:`Adopting GraphQL to avoid writing endpoints, then finding one deeply nested query does more
+          database work than your busiest REST endpoint.`,
+    build:`Take one screen, write the REST calls and the single GraphQL query, and count round trips.
+           Then count the queries the nested resolver issues for fifty rows.`,
+    refs:[["gRPC core concepts","https://grpc.io/docs/what-is-grpc/core-concepts/"],
+          ["GraphQL best practices","https://graphql.org/learn/best-practices/"]] },
+
+  { id:"openapi", name:"Keeping the spec honest", depth:"build", core:false,
+    why:`An OpenAPI document is only worth anything if it cannot drift from the code, and a
+         hand-maintained one stops being accurate within about two sprints.`,
+    code:[{label:"The loop that keeps it true", lang:"bash", code:`# 1. Generate from the same schemas that validate requests.
+npm run generate:openapi -- --out openapi.json
+
+# 2. Fail the build if the committed document is stale.
+git diff --exit-code openapi.json || {
+  echo "openapi.json is stale: commit the regenerated file"
+  exit 1
+}
+
+# 3. Fail on a breaking change that nobody acknowledged.
+oasdiff breaking origin/main:openapi.json openapi.json`}],
+    points:[
+      `Derive it from your Zod schemas so one definition both validates and documents.`,
+      `Commit the generated file. The diff in a pull request is where a reviewer can object to a breaking change.`,
+      `Examples are worth more than the schema to a human: one realistic request, one response, one error.`,
+      `Checking that two services still agree is contract testing, in the testing stage.`],
+    trade:`Spec-first is worth its overhead when two teams must agree before either can build. Everywhere
+           else it is a second source of truth somebody has to keep in step by hand.`,
+    trap:`Treating the spec as documentation rather than a build artifact. Once nothing fails when it is
+          wrong, it will be wrong, and a stale document is worse than none.`,
+    build:`Generate a document from your service and find the first thing that is wrong. It is usually an
+           error response that is not described.`,
+    refs:[["OpenAPI specification","https://spec.openapis.org/oas/latest.html"]] }
+
   ] },
 
 { num:4, id:"database", phase:2, name:"Data modelling and the database",
