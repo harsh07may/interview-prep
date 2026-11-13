@@ -172,6 +172,27 @@ ul.pts b{font-weight:700}
 .pager .ttl{font-family:var(--display);font-weight:700;font-size:15px;color:var(--ink)}
 .pager a.next{text-align:right;margin-left:auto}
 
+/* ---------- capstone ---------- */
+.cap{max-width:50rem}
+.cap h3{font-family:var(--display);font-weight:700;font-size:1.22rem;margin:30px 0 8px;
+  padding-top:22px;border-top:1px solid var(--line)}
+.cap h3:first-child{border-top:none;padding-top:0;margin-top:18px}
+.cap h4{font-family:var(--display);font-weight:700;font-size:1.02rem;margin:0 0 6px}
+.cap p{margin:8px 0 0}
+.cap > ul{margin:10px 0 0;padding:0;list-style:none}
+.cap > ul > li{position:relative;padding:0 0 0 20px;margin:7px 0;font-size:15.3px}
+.cap > ul > li::before{content:"";position:absolute;left:4px;top:.62em;width:5px;height:5px;
+  border-radius:50%;background:var(--accent)}
+.cap .ms{background:var(--surface);border:1px solid var(--line);border-radius:12px;
+  padding:16px 18px;margin:14px 0 0}
+.cap .ms p{font-size:15.3px}
+.cap .uses{font-size:12.6px;color:var(--muted);margin-top:10px;font-family:var(--mono);line-height:1.5}
+.cap .check{background:var(--accent-soft);border-left:3px solid var(--accent);
+  border-radius:0 8px 8px 0;padding:10px 13px;margin-top:11px}
+.cap .check p{margin:0;font-size:14.6px}
+.cap .closing{background:var(--accent-soft);border-radius:12px;padding:20px 22px;margin:28px 0 0}
+.cap .closing h3{margin-top:0;border-top:none;padding-top:0}
+
 /* ---------- toc ---------- */
 .toc{position:sticky;top:var(--top);height:calc(100vh - var(--top));overflow-y:auto;padding:28px 16px 60px 8px}
 .toc h2{font-family:var(--display);font-size:11px;letter-spacing:.09em;text-transform:uppercase;
@@ -2976,72 +2997,896 @@ async function deliver(sub, event) {
   ] },
 
 { num:12, id:"reliability", phase:5, name:"Reliability and fault tolerance",
-  lede:"Not yet rewritten.",
+  lede:"Everything you depend on will fail. Decide now what happens when it does.",
   topics:[
-  { id:"timeouts-retries", name:"When a dependency fails: timeouts, retries, jitter and budgets", depth:"build", core:true,
-    why:`Not yet rewritten in the new format.` },
-  { id:"circuit-breakers", name:"Circuit breakers, bulkheads and degraded modes", depth:"build", core:false,
-    why:`Not yet rewritten in the new format.` },
-  { id:"lifecycle-probes", name:"Readiness, liveness and graceful shutdown", depth:"build", core:true,
-    why:`Not yet rewritten in the new format.` },
-  { id:"error-handling", name:"Error handling that aids diagnosis", depth:"build", core:true,
-    why:`Not yet rewritten in the new format.` },
-  { id:"backups-rollback", name:"Backups, restore drills and rollback", depth:"build", core:false,
-    why:`Not yet rewritten in the new format.` }
+
+  { id:"timeouts-retries", name:"Timeouts, retries and jitter", depth:"build", core:true,
+    why:`A remote call has three outcomes, not two: success, failure, and no answer. The third holds a
+         worker forever, and retries multiply load exactly when the dependency is already struggling.`,
+    code:[{label:"Measured: why jitter, not just backoff", lang:"js", code:`const noJitter   = (n) => Math.min(CAP, BASE * 2 ** n);
+const fullJitter = (n) => Math.random() * Math.min(CAP, BASE * 2 ** n);
+
+// attempt  no jitter   full jitter, 10 clients that failed together
+// 0         100ms
+// 3         800ms      4ms .. 711ms   e.g. 385, 4, 711, 457, 665, 263
+// 5        3200ms
+//
+// Without jitter those ten clients all retry at exactly 800ms, then
+// all at 1600ms. The backoff curve spaces out ONE client's attempts;
+// the randomness is what spreads the herd.
+
+async function callWithRetries(fn, deadline, max = 3) {
+  for (let attempt = 0; ; attempt++) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new DeadlineExceeded();
+    try {
+      return await fn(AbortSignal.timeout(Math.min(remaining, PER_ATTEMPT)));
+    } catch (e) {
+      if (!isRetryable(e) || attempt === max - 1) throw e;
+      if (!retryBudget.allow()) throw e;        // shed, do not amplify
+      await sleep(fullJitter(attempt));
+    }
+  }
+}`}],
+    points:[
+      `<b>Every</b> outbound call gets a deadline, derived from the request's own, so a call never outlives the caller waiting for it.`,
+      `Each hop's timeout must be shorter than its caller's, or you do work for someone who has already gone.`,
+      `Retry only idempotent operations. Retrying a non-idempotent write after a timeout is how a payment is taken twice.`,
+      `A <b>retry budget</b> caps retries as a fraction of traffic. It converts "retry until it works" into "retry while there is spare capacity".`],
+    trap:`Retrying at several layers at once. The HTTP client retries three times, the wrapper three,
+          the caller three — one user action becomes twenty-seven requests to a failing dependency.`,
+    build:`List every outbound call and its timeout. Any that says "none" or "sixty seconds" is the
+           finding. Then add the timeouts along one path and compare with what the client waits.`,
+    refs:[] },
+
+  { id:"circuit-breakers", name:"Breakers and degraded modes", depth:"build", core:false,
+    why:`Timeouts bound one slow call. They do not stop you making a thousand more to something clearly
+         down, each costing a connection and a timeout's worth of waiting.`,
+    code:[{label:"Classify first — it decides the fallback", lang:"js", code:`// recommendations  optional   -> [] and hide the section
+// pricing          ESSENTIAL  -> fail the request with a clear 503
+// search           optional   -> fall back to a database LIKE query
+// audit log        optional   -> queue locally, send later
+
+const breaker = new CircuitBreaker(callRecommendations, {
+  timeout: 300,                   // short: it is optional
+  errorThresholdPercentage: 50,
+  resetTimeout: 30_000,           // then let ONE trial call through
+});
+breaker.fallback(() => []);       // decided in advance, not in the incident
+
+app.get('/products/:id', async (req, res) => {
+  const [product, recs] = await Promise.all([
+    products.find(req.params.id),           // essential: no fallback
+    breaker.fire(req.params.id),            // optional: [] if open
+  ]);
+  res.json({ ...product, recommendations: recs });
+});`}],
+    points:[
+      `<b>Closed, open, half-open.</b> Open means fail immediately without calling; half-open lets a trickle through to test recovery.`,
+      `It protects the dependency as much as you: a struggling service gets a chance to recover instead of being held under.`,
+      `A <b>bulkhead</b> is a separate pool per dependency, so one slow upstream cannot consume the capacity the others need.`,
+      `Measure trips. A breaker that opens regularly is telling you about a problem that predates it.`],
+    trade:`A sensitive breaker protects you fast and trips on a blip, turning two seconds of wobble into
+           thirty seconds of degradation. Tune the threshold against the cooldown: a long cooldown needs
+           a high threshold, because a false trip costs more.`,
+    trap:`Adding a breaker without deciding the fallback. It opens, the fallback throws, and you have
+          replaced a slow failure with a fast one while believing the service is resilient.`,
+    build:`Mark every dependency essential or optional. For each optional one write the fallback, force
+           the failure in a test, and confirm the page still renders.`,
+    refs:[] },
+
+  { id:"lifecycle-probes", name:"Probes and graceful shutdown", depth:"build", core:true,
+    why:`Liveness asks whether to restart you; readiness asks whether to send you traffic. Answering
+         both with the same endpoint causes fleet-wide restart loops.`,
+    code:[{label:"Express: drain in order, with a deadline", lang:"js", code:`let ready = true;
+app.get('/livez',  (req, res) => res.sendStatus(200));   // almost nothing
+app.get('/readyz', async (req, res) =>                    // real dependencies
+  ready && await db.ping() ? res.sendStatus(200) : res.sendStatus(503));
+
+const server = app.listen(8080);
+
+process.on('SIGTERM', async () => {
+  ready = false;                      // 1. fail readiness: no new traffic
+  await sleep(2000);                  //    let the load balancer notice
+  server.close(async () => {          // 2. stop accepting, finish in-flight
+    await pool.end();                 // 3. release resources
+    process.exit(0);
+  });
+  setTimeout(() => {                  // 4. deadline INSIDE the grace period
+    console.error('drain deadline exceeded, forcing exit');
+    process.exit(1);
+  }, 10_000).unref();
+});
+
+// With a 400ms request in flight when SIGTERM arrives:
+//   readiness now failing, in-flight: 1
+//   client got: 200 done        <- it completed
+//   in-flight finished, closing resources`}],
+    points:[
+      `Liveness must check <b>almost nothing</b>. A dependency there turns a thirty-second database blip into every instance being killed at once.`,
+      `Readiness may legitimately flap. That is the point of it being separate.`,
+      `Wait a couple of seconds after failing readiness before closing the listener — load balancers take time to notice.`,
+      `<code>terminationGracePeriodSeconds</code> must exceed your drain deadline, or the orchestrator kills you mid-drain.`],
+    trap:`Without a drain, every rolling deploy gives some clients a connection reset. It looks like
+          flakiness rather than like a deploy problem.`,
+    build:`Send SIGTERM while a slow request is in flight and watch what the client receives. A
+           connection reset means you have no drain, and it is happening on every deploy today.`,
+    refs:[["Kubernetes: probes","https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/"]] },
+
+  { id:"error-handling", name:"Errors you can diagnose", depth:"build", core:true,
+    why:`Two audiences: the caller, who needs a stable code and no internal detail, and you at 3am, who
+         needs to know exactly what happened. Most codebases serve neither.`,
+    code:[{label:"Context added at each layer, nothing swallowed", lang:"js", code:`// Middle layers add what they know and re-raise. The cause is kept.
+async function chargeOrder(order) {
+  try {
+    return await gateway.charge(order.totalCents, { key: order.id });
+  } catch (e) {
+    throw new PaymentUnavailable(\`charging order \${order.id}\`, { cause: e });
+  }
+}
+
+// ONE boundary handler decides what the caller sees.
+app.use((err, req, res, next) => {
+  if (err instanceof DomainError) {
+    req.log.info({ code: err.code, orderId: err.orderId }, 'domain error');
+    return res.status(err.status).json({ code: err.code, requestId: req.id });
+  }
+  req.log.error({ err, path: req.path, userId: req.user?.id }, 'unhandled');
+  res.status(500).json({ code: 'INTERNAL', requestId: req.id });
+});
+
+// Express 5 forwards rejected promises automatically. On Express 4 an
+// async route that throws hangs forever unless you wrap it.`}],
+    points:[
+      `<b>Catch at a boundary</b> — a route, a job runner, a consumer — where you can actually do something. Catching in the middle usually means swallowing.`,
+      `Use <code>{ cause }</code> so the original stack survives wrapping.`,
+      `An expected error (card declined, out of stock) is domain information at info level. An unexpected one is a bug at error level.`,
+      `Log the detail with the same correlation id you returned, so a support engineer with the id gets everything.`],
+    trap:`Logging an error and then re-raising it. One incident produces five entries that look like
+          five problems, and the real count of distinct failures becomes unknowable.`,
+    build:`Grep for empty catch blocks and ones that log without the error object. Then trigger an
+           unhandled exception and check the response has an id and no stack, and the log has the stack.`,
+    refs:[] },
+
+  { id:"backups-rollback", name:"Backups and rollback", depth:"build", core:false,
+    why:`A backup you have never restored is a hypothesis. The usual discoveries, made during an
+         incident: a table was excluded, the key is gone, or it takes eleven hours.`,
+    code:[{label:"What the weekly drill actually checks", lang:"bash", code:`restore_latest_backup --target scratch --timeout 2h
+
+# 1. Did it finish inside the RTO? Record the duration — a restore
+#    creeping up month by month is your warning before it breaches.
+
+# 2. Is the data all there? Compare against production.
+psql scratch -c "
+  select 'orders' as t, count(*) from orders
+  union all select 'customers', count(*) from customers
+  union all select 'payments',  count(*) from payments;"
+#    A table missing from the backup config shows up here and nowhere else.
+
+# 3. How far behind is it? That number is your REAL RPO.
+psql scratch -c "select max(created_at) from orders;"
+
+# 4. Does the app actually start against it? A restore that produces
+#    an unusable database has told you nothing.`}],
+    points:[
+      `<b>RPO</b> is how much data you can lose, set by backup frequency. <b>RTO</b> is how long you can be down, set by restore time. Two different numbers, both need stating.`,
+      `Point-in-time recovery is what you want after a bad migration or an accidental delete at a known time.`,
+      `Rolling back code is fast; rolling back a schema often is not. That is why expand and contract exists.`,
+      `Both numbers should come from the business: what is an hour of lost orders worth, and an hour of downtime?`],
+    trap:`Keeping backups in the same account, region or storage as the thing they back up. A compromise
+          or a bad lifecycle rule that destroys the primary very often destroys the backups too.`,
+    build:`Restore your latest backup to a scratch environment and time it. Compare row counts and the
+           newest timestamp. Those two numbers are your real RTO and RPO.`,
+    refs:[["Postgres: PITR","https://www.postgresql.org/docs/current/continuous-archiving.html"]] }
+
   ] },
 
 { num:13, id:"observability", phase:5, name:"Observability and debugging",
-  lede:"Not yet rewritten.",
+  lede:"Answering a question you did not anticipate, about a system you cannot pause.",
   topics:[
-  { id:"structured-logs", name:"Structured logs and correlation IDs", depth:"build", core:true,
-    why:`Not yet rewritten in the new format.` },
-  { id:"metrics", name:"Metrics: golden signals, RED and USE, and histograms", depth:"build", core:true,
-    why:`Not yet rewritten in the new format.` },
-  { id:"tracing", name:"Distributed tracing and context propagation", depth:"understand", core:false,
-    why:`Not yet rewritten in the new format.` },
-  { id:"alerting-slos", name:"Alerting, SLOs, runbooks and postmortems", depth:"understand", core:false,
-    why:`Not yet rewritten in the new format.` },
-  { id:"debugging-prod", name:"Debugging production systematically", depth:"build", core:true,
-    why:`Not yet rewritten in the new format.` }
+
+  { id:"structured-logs", name:"Structured logs and request ids", depth:"build", core:true,
+    why:`Prose logs can be read by a person and not by a machine. Once there is more than one instance
+         you need to filter by user, endpoint, status and duration — which needs fields, not sentences.`,
+    code:[{label:"Express + pino: the id attaches itself", lang:"js", code:`const pinoHttp = require('pino-http');
+const { AsyncLocalStorage } = require('node:async_hooks');
+const als = new AsyncLocalStorage();
+
+app.use(pinoHttp({
+  genReqId: (req) => req.get('X-Request-Id') ?? randomUUID(),
+  customProps: (req) => ({ userId: req.user?.id, tenantId: req.user?.tenantId }),
+  redact: ['req.headers.authorization', 'req.headers.cookie', '*.password'],
+}));
+app.use((req, res, next) => {
+  res.set('X-Request-Id', req.id);        // give it back to the client
+  als.run({ requestId: req.id }, next);   // available without passing it
+});
+
+// Propagate it outbound, and onto every job you enqueue:
+fetch(url, { headers: { 'X-Request-Id': als.getStore()?.requestId } });
+
+// { "level":30, "msg":"request completed", "requestId":"01J9F0G7Q0X2",
+//   "method":"POST", "route":"/orders", "status":201, "duration_ms":142,
+//   "userId":42, "db_ms":88, "cache_hit":false }`}],
+    points:[
+      `Log the <b>route template</b>, not the path. <code>/orders/8841</code> as a field value gives a million distinct values and nothing to group by.`,
+      `One line per completed request with method, route, status, duration and identity answers most questions on its own.`,
+      `Field names must match across services, or a cross-service query is impossible.`,
+      `Error means someone must act. Logging handled errors at error level trains people to ignore the level.`],
+    trade:`Keep every error and slow request in full, sample successful fast ones, and keep a short
+           full-fidelity window alongside a long sampled one. Logging everything costs more than serving
+           the traffic on a hot path.`,
+    trap:`Logging the full request body to be thorough. It fills the store, is rarely the field you
+          needed, and on an auth endpoint writes credentials into a system with broad read access.`,
+    build:`Add the id, propagate it outbound, return it in a header. Then pick a past incident and check
+           whether one query would now answer it.`,
+    refs:[] },
+
+  { id:"metrics", name:"Metrics and histograms", depth:"build", core:true,
+    why:`Logs tell you about one request; metrics about all of them. The commonest mistake is recording
+         an average, which is dominated by the fast majority and hides exactly what you need to see.`,
+    code:[{label:"Computed over 10,000 requests", lang:"text", code:`95% take 15-30ms, 4.5% take 200-500ms, 0.5% take 2-5s.
+
+mean      54ms    <- the dashboard number, flat and reassuring
+p50       23ms    <- what a typical user sees
+p95       30ms
+p99      465ms    <- 1 in 100 requests
+p99.9   4404ms    <- 1 in 1000, and they are still your users
+max     4992ms
+
+A page making 10 such calls:
+  chance all 10 are under the p99:  90.4%
+  chance at least one is slower:     9.6%
+
+Tail amplification: a one-in-a-hundred slow call becomes a
+one-in-ten slow page.`}],
+    points:[
+      `<b>Golden signals</b>: latency, traffic, errors, saturation. RED for services, USE for resources.`,
+      `Latency is <b>always</b> a histogram. You cannot average two instances' p99 to get the fleet p99 — aggregate buckets, then compute.`,
+      `<b>Cardinality</b> is what breaks a metrics backend. Every distinct label combination is a series; a user id as a label will take it down faster than your traffic will.`,
+      `Prometheus and Grafana are the usual toolchain; OpenTelemetry is the vendor-neutral way to produce the data.`],
+    trap:`Alerting on a mean. It moves slowly and a serious tail problem can double while it barely
+          changes, so the alert fires after the complaints.`,
+    build:`Plot the mean and the p99 for one endpoint on the same graph for a week and watch how
+           differently they move. Then count your distinct label combinations.`,
+    refs:[["Prometheus: histograms","https://prometheus.io/docs/practices/histograms/"]] },
+
+  { id:"tracing", name:"Distributed tracing", depth:"understand", core:false,
+    why:`A trace follows one request across services as a tree of timed spans. It earns its cost at the
+         second or third service; before that, logs with a request id get you most of the way.`,
+    code:[{label:"The W3C header, exactly", lang:"text", code:`traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
+             │  │                                │                │
+             │  │                                │                └ trace-flags, 2 hex
+             │  │                                └ parent-id,  16 hex (8 bytes)
+             │  └ trace-id, 32 hex (16 bytes)
+             └ version, 2 hex
+
+Format:  version "-" trace-id "-" parent-id "-" trace-flags
+
+trace-flags: the least significant bit is "sampled". The spec says
+that when set it "denotes that the caller may have recorded trace
+data", and when unset "the caller did not record trace data
+out-of-band". A second header, tracestate, carries vendor data.
+
+Every service must pass it through — including through your queues
+and jobs. A service that drops it does not break anything visibly:
+it silently starts a NEW trace, and the two halves are disconnected.`}],
+    points:[
+      `Instrument the boundaries first — incoming requests, outgoing calls, database queries — which gives most of the value automatically.`,
+      `Put the trace id in every log line. Moving between traces and logs is where most of the practical value sits.`,
+      `<b>Head sampling</b> is cheap and usually will not have sampled the request someone is asking about. <b>Tail sampling</b> keeps errors and slow traces, and needs a collector tier.`,
+      `Adopt the standard headers rather than inventing your own, so every library and vendor agrees.`],
+    trap:`Instrumenting one service and declaring tracing done. The value is entirely in the hops you
+          cannot see, so propagation through every service, queue and job is the actual work.`,
+    build:`Make one trace span two services. Then send a request through a queue and check whether the
+           trace survives — it usually does not, because the header was not carried in the message.`,
+    refs:[["W3C Trace Context","https://www.w3.org/TR/trace-context/"],
+          ["OpenTelemetry","https://opentelemetry.io/docs/"]] },
+
+  { id:"alerting-slos", name:"Alerting and SLOs", depth:"understand", core:false,
+    why:`An alert should mean a person must act now. Most alerting drifts away from that, and then a
+         real alert arrives among the noise and gets silenced with the rest.`,
+    code:[{label:"Burn rate instead of a fixed threshold", lang:"text", code:`SLO: 99.9% of requests succeed over 30 days
+     error budget = 0.1% of requests
+
+Burn rate = observed error rate / budgeted error rate.
+At 1x you exactly exhaust the budget in 30 days.
+
+  fast:  14.4x over 1 hour   -> 2% of the budget in an hour.  PAGE.
+  slow:  3x over 6 hours     -> a real degradation.           TICKET.
+
+Why two: the fast rule catches an outage in minutes, the slow rule
+catches the quiet 0.3% error rate a fixed 1% threshold never notices
+and that eats the month by the 20th.
+
+Every alert carries:
+  what it means, in one line
+  a link to the dashboard
+  a link to the runbook
+  who owns the service
+Missing any of the four means the alert is not finished.`}],
+    points:[
+      `Alert on <b>symptoms users feel</b> — error rate, latency. High CPU with healthy latency is information, not an emergency.`,
+      `<b>SLI</b> is what you measure, <b>SLO</b> the target you set yourself, <b>SLA</b> the contract with a penalty. Confusing the last two is expensive.`,
+      `Pick two or three indicators and a target you would genuinely act on. An objective you have never missed is too loose to inform anything.`,
+      `Blameless postmortems, with actions that have owners.`],
+    trap:`Paging on anything that resolves itself. Every self-resolving alert teaches the on-call
+          engineer that alerts can be waited out, and that lesson gets applied to the next one.`,
+    build:`Mark each current alert symptom or cause, and whether it has a runbook. Delete or downgrade
+           every cause-based alert with no user-visible effect.`,
+    refs:[] },
+
+  { id:"debugging-prod", name:"Debugging production", depth:"build", core:true,
+    why:`Under pressure the instinct is to guess, change something, and see. That occasionally works,
+         frequently makes things worse, and destroys the evidence either way.`,
+    code:[{label:"The same order, every time", lang:"text", code:`1. WHAT CHANGED
+   deploys, config, flags, dependency deploys, traffic shape, data
+   volume, a scheduled job. Line them up against the time. If
+   something changed at 09:12 and the symptom began at 09:14, you
+   are probably already finished.
+
+2. CONFIRM THE SYMPTOM AS A NUMBER
+   "slow" is not actionable. "p99 on POST /orders went 200ms -> 4s
+   at 09:14" is.
+
+3. SCOPE IT
+   all endpoints or one?  all instances or one?
+   all users or one tenant?  all regions or one?
+   Each answer eliminates half the possibilities.
+
+4. BISECT THE PATH
+   edge -> app -> database -> dependencies. Where does the latency
+   FIRST appear? The hop before it is innocent.
+
+5. ONE HYPOTHESIS
+   write it down, write what would disprove it, test that. Do not
+   change two things.
+
+6. ONLY THEN CHANGE SOMETHING
+   and if you must restart, capture the heap, the threads and the
+   connection state first.`}],
+    points:[
+      `A method is not slower. It is faster, because it stops you investigating four things at once and being unable to attribute the result.`,
+      `Write as you go: the notes become the postmortem and stop you re-checking things.`,
+      `Mitigate first when customers are affected — roll back, fail over, shed load — but capture evidence first, which takes seconds.`,
+      `The order is deliberately boring so it is usable at 3am by someone who did not write the service.`],
+    trap:`Restarting as the first response. It resolves the symptom often enough to become a habit,
+          discards every piece of in-memory evidence, and guarantees a recurrence with no new information.`,
+    build:`Rewrite your last incident against these six steps and mark where the investigation jumped
+           ahead. It is almost always between step 1 and step 5.`,
+    refs:[] }
+
   ] },
 
 { num:14, id:"deploy", phase:5, name:"Deployment and production engineering",
-  lede:"Not yet rewritten.",
+  lede:"Getting the thing you built onto machines, repeatedly, without dropping requests.",
   topics:[
-  { id:"containerising", name:"Containerising a service properly", depth:"build", core:true,
-    why:`Not yet rewritten in the new format.` },
-  { id:"pipeline", name:"Pipeline: build once, promote the artifact", depth:"build", core:true,
-    why:`Not yet rewritten in the new format.` },
-  { id:"release-strategies", name:"Release strategies and feature flags", depth:"build", core:false,
-    why:`Not yet rewritten in the new format.` },
-  { id:"kubernetes-objects", name:"The Kubernetes objects you actually touch", depth:"understand", core:false,
-    why:`Not yet rewritten in the new format.` },
-  { id:"limits-autoscaling", name:"Resource limits, autoscaling and OOMKills", depth:"build", core:false,
-    why:`Not yet rewritten in the new format.` },
+
+  { id:"containerising", name:"A container that shuts down", depth:"build", core:true,
+    why:`Most images work. Fewer are small, cacheable, non-root, and able to receive SIGTERM — and the
+         last one silently breaks every deploy.`,
+    code:[{label:"Demonstrated without Docker: the signal trap", lang:"bash", code:`# exec form: the app replaces the shell, so it IS the process.
+sh -c 'exec node server.js' &
+kill -TERM $!
+#   app: SIGTERM received, draining        <- clean shutdown
+
+# shell form: a shell starts the app as a child.
+sh -c 'node server.js' &
+kill -TERM $!
+#   [1]+ Terminated   sh -c 'node server.js'
+#   app is STILL RUNNING: the shell took the signal and kept it
+
+# In a container that means your drain never runs. The orchestrator
+# waits out the grace period, sends SIGKILL, and every in-flight
+# request is dropped — on every single deploy.`},
+           {label:"Ordered by change frequency", lang:"dockerfile", code:`# syntax=docker/dockerfile:1
+FROM node:22.11.0-bookworm-slim AS build
+WORKDIR /app
+COPY package.json package-lock.json ./     # changes rarely
+RUN npm ci                                  # cached unless the lockfile moves
+COPY . .                                    # changes every commit
+RUN npm run build
+
+FROM node:22.11.0-bookworm-slim AS runtime
+ENV NODE_ENV=production
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+COPY --from=build /app/dist ./dist          # the artifact only
+
+USER node                                   # not root
+EXPOSE 8080
+ENTRYPOINT ["node", "dist/server.js"]       # exec form: signals arrive
+
+# Not built here: this container has a Docker client and no daemon.`}],
+    points:[
+      `Order instructions least- to most-frequently-changing. That ordering is the whole build-time optimisation.`,
+      `Pin the base to a patch version or digest. <code>node:22</code> moves, and your build stops being reproducible.`,
+      `Multi-stage keeps your compilers out of production and the image small.`,
+      `<code>npm ci</code>, not <code>npm install</code>: it respects the lockfile exactly.`],
+    trade:`A minimal base is smaller with less attack surface, and takes away the shell you wanted during
+           an incident. Alpine's different C library occasionally breaks native modules in tedious ways.
+           Slim Debian is boring, which is usually right for an application service.`,
+    trap:`The shell form of ENTRYPOINT. It works, it starts the service, and it quietly disables
+          graceful shutdown — so the symptom is a few failed requests per deploy, not a container problem.`,
+    build:`Run the two shell snippets and watch the difference. Then check your image: pinned base,
+           dependencies before source, no build tools in the final stage, non-root, array entrypoint.`,
+    refs:[["Docker: best practices","https://docs.docker.com/build/building/best-practices/"]] },
+
+  { id:"pipeline", name:"Build once, promote the artifact", depth:"build", core:true,
+    why:`The property that makes a pipeline trustworthy is that the thing tested is bit-for-bit the
+         thing deployed. Rebuilding per environment quietly breaks that.`,
+    code:[{label:"The digest is the identity from here on", lang:"yaml", code:`build:
+  run: |
+    docker build -t "$REGISTRY/orders:$GIT_SHA" .
+    docker push "$REGISTRY/orders:$GIT_SHA"
+    docker inspect --format='{{index .RepoDigests 0}}' \\
+      "$REGISTRY/orders:$GIT_SHA" > artifact.txt
+
+test:                       # test THAT artifact, not a fresh build
+  needs: build
+  run: docker run --rm "$(cat artifact.txt)" npm run test:integration
+
+deploy-staging:             # same digest; only config differs
+  needs: test
+  run: deploy --image "$(cat artifact.txt)" --env staging
+
+deploy-production:
+  needs: deploy-staging
+  when: manual
+  run: deploy --image "$(cat artifact.txt)" --env production
+
+# Order stages by how fast they fail: lint and unit tests take
+# seconds and belong before a build that takes minutes.`}],
+    points:[
+      `Staging passing and production failing on an identical commit usually means two builds an hour apart picked up a different transitive dependency.`,
+      `Configuration is injected at deploy. The same image reads different environment variables per environment.`,
+      `Staging should differ from production in <b>scale and data</b>, not in shape. Different managed services make its result meaningless.`,
+      `A build argument is visible in the image history, which is a common way a token reaches a registry.`],
+    trade:`Deploying automatically on green gives the shortest path and the smallest changes. A manual
+           gate encourages batching, so changes arrive in larger, riskier groups and the gate becomes a
+           rubber stamp. Automatic to staging, one quick click to production.`,
+    trap:`Deploying a mutable tag like <code>latest</code>. Two instances started minutes apart can run
+          different code, and "what is in production" has no reliable answer.`,
+    build:`Trace one commit through and compare digests between what was tested and what was deployed.
+           Then try to answer, from the deployment system alone, which commit is running right now.`,
+    refs:[] },
+
+  { id:"release-strategies", name:"Releasing with a way back", depth:"build", core:false,
+    why:`The question that decides the strategy is how fast you can undo it. Flags are a separate axis
+         and often more useful than the deployment strategy itself.`,
+    code:[{label:"Comparing the four", lang:"text", code:`              rollback speed   extra cost   two versions at once
+rolling       one more deploy  none         yes, always
+blue-green    seconds          2x infra     briefly, during the switch
+canary        seconds          small        yes, deliberately
+feature flag  seconds          none         same code, both paths
+
+Rolling and canary both run two versions at once, so EVERY release
+must be compatible with the one before it: additive API changes,
+expand-and-contract migrations, events the old version can read.
+
+A canary is only worth anything with:
+  error rate and latency labelled BY VERSION
+  an automatic abort rule, e.g. error rate 2x the baseline
+  long enough to mean something: 5 minutes of traffic, not 30 requests
+
+Every flag gets an owner and a removal date on the day it is created.`}],
+    points:[
+      `A bug behind a flag at 5% affects a twentieth of the traffic and is switched off in seconds, with no deploy.`,
+      `Blue-green gives the cleanest rollback and does not help with the database, which both colours share.`,
+      `Rolling plus canary plus flag discipline covers most teams; blue-green is rarely needed.`,
+      `Every combination of long-lived flags is a code path never tested together.`],
+    trap:`Treating a canary as a waiting period rather than a comparison. Watching it for five minutes
+          without per-version metrics tells you only that it started.`,
+    build:`Add a version label to your metrics and confirm you can plot error rate for two versions side
+           by side. Then list your flags with creation dates: anything over three months old is debt.`,
+    refs:[] },
+
+  { id:"kubernetes-objects", name:"The objects you actually touch", depth:"understand", core:false,
+    why:`Kubernetes is large and most of it is not your problem. As the owner of one service you touch
+         about six objects, and the failures come from three settings.`,
+    code:[{label:"A Deployment with the parts that matter", lang:"yaml", code:`apiVersion: apps/v1
+kind: Deployment
+metadata: { name: orders }
+spec:
+  replicas: 3
+  selector:
+    matchLabels: { app: orders }        # MUST match the template labels
+  template:
+    metadata:
+      labels: { app: orders }           # and the Service's selector
+    spec:
+      terminationGracePeriodSeconds: 30 # longer than your drain deadline
+      containers:
+        - name: orders
+          image: registry/orders@sha256:...   # a digest, not a tag
+          readinessProbe:
+            httpGet: { path: /readyz, port: 8080 }
+          livenessProbe:
+            httpGet: { path: /livez, port: 8080 }   # NOT /readyz
+            failureThreshold: 3
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }  # what you are scheduled on
+            limits:   { memory: 512Mi }             # exceed it -> killed`},
+           {label:"The four commands that find most problems", lang:"bash", code:`kubectl describe pod <pod>          # events at the bottom: the real reason
+kubectl get endpoints <service>     # EMPTY means the selector matches nothing
+kubectl logs <pod> --previous       # the crashed container, not the new one
+kubectl get events --sort-by=.lastTimestamp
+
+# Not run here: no cluster in this container.`}],
+    points:[
+      `<b>Deployment</b> declares replicas and image. <b>Service</b> is a stable name in front of pods selected by label, and is also service discovery.`,
+      `A deploy that "succeeds" with an unreachable service is usually a Service selector not matching the pod labels. <code>get endpoints</code> finds it in one command.`,
+      `A <b>Secret</b> is base64, not encrypted, unless the cluster is configured for it.`,
+      `<code>terminationGracePeriodSeconds</code> must exceed your drain deadline.`],
+    trade:`A cluster gives rollouts, health management, discovery, autoscaling and secrets in one place,
+           and is a substantial system of its own. For one service with steady traffic a managed
+           container platform is less to run. The threshold is higher than enthusiasm suggests.`,
+    trap:`Pointing the liveness probe at the readiness endpoint. One character of config, and a
+          dependency blip restarts every pod simultaneously.`,
+    build:`Check four things on a Deployment you own: image is a digest, grace period exceeds your drain,
+           the probes differ, a memory limit is set. Then break the selector and find it with
+           <code>get endpoints</code>.`,
+    refs:[["Kubernetes: Deployments","https://kubernetes.io/docs/concepts/workloads/controllers/deployment/"]] },
+
+  { id:"limits-autoscaling", name:"Limits, autoscaling and OOMKills", depth:"build", core:false,
+    why:`Requests and limits look like a pair and behave completely differently. CPU is throttled;
+         memory is fatal.`,
+    code:[{label:"What crossing each limit does", lang:"text", code:`CPU limit exceeded     -> throttled. Latency rises, nothing errors, and
+                          the only evidence is the throttling metric.
+                          Many teams are better off with NO cpu limit
+                          and a correct request.
+
+Memory limit exceeded  -> OOMKilled. Exit 137, instant, no stack
+                          trace, no shutdown hook, nothing in the log.
+                          Always set this: without it a leak takes
+                          down the whole node instead of one pod.
+
+Tell the runtime about the limit, or it grows into being killed:
+  Node   --max-old-space-size=384        (container limit 512Mi)
+  JVM    -XX:MaxRAMPercentage=75
+Headroom is for stacks, buffers and native allocations, not just heap.
+
+Autoscaling only helps if the bottleneck scales with replicas:
+  CPU-bound work           -> scale on CPU, works well
+  I/O-bound, mostly waiting-> scale on in-flight requests or queue depth
+  bottleneck is the DB pool-> scaling makes it WORSE: more instances,
+                              more connections, same database`}],
+    points:[
+      `Requests decide where you are scheduled and what you are guaranteed; limits decide what happens when you exceed them.`,
+      `Set the memory limit from a measured peak with headroom, and treat frequent OOMKills as a signal to investigate rather than a number to raise.`,
+      `CPU throttling is invisible unless you watch the metric. Most teams never have.`,
+      `Requests set too low means being scheduled onto a crowded node.`],
+    trap:`Raising the memory limit to stop the restarts. It turns a restart every hour into one every
+          six hours, leaves the leak, and makes each eventual failure lose more state.`,
+    build:`Compare your container memory limit with your runtime heap setting. If the heap ceiling is not
+           comfortably below the limit, you are configured to be OOMKilled.`,
+    refs:[["Kubernetes: resources","https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/"]] },
+
   { id:"iac", name:"Infrastructure as code", depth:"understand", core:false,
-    why:`Not yet rewritten in the new format.` },
-  { id:"cloud-iam", name:"Cloud primitives and least-privilege IAM", depth:"understand", core:false,
-    why:`Not yet rewritten in the new format.` }
+    why:`Infrastructure created by clicking cannot be reviewed, reproduced or recreated, and nobody
+         remembers why it is the way it is. Four concepts explain what goes wrong.`,
+    code:[{label:"The plan IS the review", lang:"bash", code:`terraform plan -out=tf.plan
+
+#   + create     a new resource
+#   ~ update     changed in place, usually fine
+#   -/+ replace  DESTROYED and recreated. On a database, read twice.
+#   -  destroy   removed
+
+# The phrase that matters most on anything stateful:
+#   aws_db_instance.orders must be replaced
+#   -/+ resource "aws_db_instance" "orders" {
+#         ~ engine_version = "15.4" -> "16.1"   # forces replacement
+#
+# "forces replacement" on a database means destroy and recreate,
+# which means the data is gone.
+
+terraform apply tf.plan      # apply exactly what was reviewed,
+                             # not a freshly computed plan`}],
+    points:[
+      `<b>Declarative</b>: you describe the end state and re-running changes nothing, which is what makes it safe to re-run.`,
+      `<b>State</b> maps your code to real resources. Lose it and the tool tries to create everything again; share it carelessly and two applies corrupt it. Remote, locked, never in the repo.`,
+      `<b>Drift</b> is someone changing something by hand. The next apply tries to change it back, possibly mid-incident.`,
+      `Keep environments as the same code with different inputs. That is what makes staging a rehearsal.`],
+    trade:`Anything stateful, networked or security-relevant should be code. Genuinely disposable
+           experiments need not be. The failure mode to avoid is the half-managed estate, where it is
+           unclear who owns a resource and an apply deletes something a person created.`,
+    trap:`State in local files or committed to the repository. It holds resource ids and often secrets,
+          and losing it means the tool no longer knows your production database belongs to it.`,
+    build:`Import one hand-made resource and read the plan diff. That diff is the undocumented config
+           nobody could have reproduced.`,
+    refs:[] },
+
+  { id:"cloud-iam", name:"Least-privilege IAM", depth:"understand", core:false,
+    why:`You need very few cloud services and all of the identity model. An over-permissioned role turns
+         a small bug into a full compromise.`,
+    code:[{label:"The same permission, two ways", lang:"json", code:`// What gets written on a Friday afternoon:
+{ "Effect": "Allow", "Action": "s3:*", "Resource": "*" }
+// Every action, every bucket, including delete and including the
+// backups bucket. A code-execution bug in this service is now an
+// account-wide data loss event.
+
+// What the service actually needs:
+{ "Effect": "Allow",
+  "Action": ["s3:GetObject", "s3:PutObject"],
+  "Resource": "arn:aws:s3:::acme-uploads/orders/*" }
+// Two actions, one prefix, one bucket. No delete, no list, nothing
+// outside that path.
+
+// Start from nothing, run the service, add what fails. One
+// afternoon, and the result is a policy you can read and defend.`}],
+    points:[
+      `<b>Workload identity</b> — a role attached to the running workload with short-lived credentials — means there is no static key to leak, rotate or commit.`,
+      `<b>Deny by default</b>, so an over-broad grant is a visible line in a policy rather than an absence nobody notices.`,
+      `Check the network separately. A correct policy does not help if the database accepts connections from anywhere, and the two are configured by different people.`,
+      `A managed database costs more and removes patching, backups and failover. Usually the right trade for a small team.`],
+    trade:`Narrow policies need maintenance: a new feature fails until someone updates them, which is
+           friction at the wrong moment. Make the permission change part of the feature's pull request
+           rather than a request to another team, which is what makes people reach for the wildcard.`,
+    trap:`Static access keys in environment variables or config files. They do not expire, they get
+          committed and copied to laptops, and when one leaks you cannot tell which copy it was.`,
+    build:`List one service's permissions and check each is actually used. Anything with a wildcard is
+           where to start. Then check whether any static cloud credential exists in your config at all.`,
+    refs:[] }
+
   ] },
 
 { num:15, id:"distributed", phase:6, name:"Distributed systems you'll actually meet",
-  lede:"Not yet rewritten.",
+  lede:"The handful of distributed ideas that change decisions in an ordinary backend.",
   topics:[
-  { id:"service-boundaries", name:"Monolith, services and the distributed-monolith trap", depth:"understand", core:true,
-    why:`Not yet rewritten in the new format.` },
-  { id:"sharding", name:"Horizontal scaling, sharding and partition keys", depth:"understand", core:false,
-    why:`Not yet rewritten in the new format.` },
-  { id:"consistency-models", name:"Consistency models and what eventual consistency costs you", depth:"understand", core:false,
-    why:`Not yet rewritten in the new format.` },
-  { id:"replication-quorum", name:"Replication, leader election and quorum as things you operate", depth:"understand", core:false,
-    why:`Not yet rewritten in the new format.` },
-  { id:"clocks-ordering", name:"Clocks, ordering and why timestamps lie", depth:"understand", core:false,
-    why:`Not yet rewritten in the new format.` }
+
+  { id:"service-boundaries", name:"The distributed-monolith trap", depth:"understand", core:true,
+    why:`Splitting a system does not remove coupling; it converts function calls into network calls you
+         can no longer refactor. A well-structured monolith is the correct default.`,
+    code:[{label:"Four questions before extracting anything", lang:"text", code:`1. Can it be deployed ALONE?
+     If releasing it requires releasing something else, the boundary
+     is not real yet.
+
+2. Does it OWN its data?
+     Two services writing the same tables are one service with a
+     deployment problem. Shared schema, shared migration, shared
+     outage.
+
+3. Is the call synchronous and on the critical path?
+     4 services at 99.9% in a chain -> ~99.6% available, before any
+     bug. Each hop adds its latency and its timeout.
+
+4. Is there a TEAM boundary that matches?
+     Independent deployment is worth most when independent people
+     are doing the deploying.
+
+Fewer than three yes answers: make it a module in the monolith. The
+module is reversible in an afternoon; the service is not.`}],
+    points:[
+      `A <b>modular monolith</b> — separate modules, no reaching into another's tables, interfaces between them — gives most of the benefit for one deployment and one place to look.`,
+      `Draw boundaries around <b>data ownership</b>, not around nouns or the org chart.`,
+      `Make the boundary real inside the monolith first. If that is painful in one codebase it will be far worse over a network.`,
+      `Vertical scaling is the cheapest there is, and it runs out. Horizontal needs the statelessness from stage 1.`],
+    trap:`Extracting a service that keeps using the original database. Worst of both: the operational
+          cost of a separate deployment, a network hop, and none of the independence.`,
+    build:`Draw which component writes which tables. Every table with more than one writer is a boundary
+           violation. Then answer the four questions honestly for one service.`,
+    refs:[] },
+
+  { id:"sharding", name:"Sharding and partition keys", depth:"understand", core:false,
+    why:`The last resort, and the partition key is a decision you cannot easily take back. Indexing,
+         caching, replicas and archiving solve far more cases, and all of them are reversible.`,
+    code:[{label:"Computed: adding a fifth node to four, 10,000 keys", lang:"text", code:`modulo hashing       7963 keys move  (79.6%)
+consistent hashing   1905 keys move  (19.1%)
+ideal minimum        2000 keys       (20.0%)
+
+With modulo, node = hash(key) % N, so changing N changes the answer
+for almost every key: resharding becomes a near-total data movement,
+during which the cluster is both busy and inconsistent.
+
+Consistent hashing places nodes and keys on a ring and sends each key
+to the next node clockwise, so adding a node takes over only the arc
+between it and its predecessor. Virtual nodes (150 per real node
+here) smooth the arcs so nobody gets an unlucky share.`}],
+    points:[
+      `Anything not filtered by the partition key must ask <b>every</b> shard and merge. Joins and aggregates across shards are the cost you accept.`,
+      `<b>Skew</b> is the practical killer: one tenant forty times larger than the rest saturates its shard while the others idle, and adding shards does not help.`,
+      `Plan the rebalance before you need it, not when it is urgent.`,
+      `A correctly indexed Postgres on modern hardware handles far more than most teams assume.`],
+    trade:`A coarse key keeps each tenant's data together so most queries hit one shard, and gives you
+           skew. A fine key distributes evenly and makes every non-key query hit everything. No key is
+           good at both: pick for your dominant read, and plan separately for the largest tenant.`,
+    trap:`Sharding before exhausting single-node options. It is a structural change that makes every
+          later query and every later migration harder.`,
+    build:`Write down your largest table's size, your write rate, and the largest instance available.
+           Most teams find an order of magnitude of headroom.`,
+    refs:[] },
+
+  { id:"consistency-models", name:"What eventual consistency costs", depth:"understand", core:false,
+    why:`With one database a write is visible to the next read and nobody thinks about it. Add a
+         replica, a cache or a second service and that stops being automatic.`,
+    code:[{label:"What each model lets a user see", lang:"text", code:`strong            read after write -> new value. Always. With one
+                  primary you get it free, and lose it the moment
+                  you add a cache.
+
+read-your-writes  YOUR reads see YOUR writes; others may lag.
+                  Usually enough, and cheap: route a user to the
+                  primary for a short window after they write.
+
+monotonic reads   you never see older data than you already saw.
+                  Without it: refresh shows new, refresh again shows
+                  old, because the two reads hit different replicas.
+
+eventual          converges if writes stop. Says nothing about when,
+                  and allows every anomaly above.
+
+CAP, briefly: during a partition you choose between answering with
+possibly stale data and refusing to answer. The useful version is
+that partitions happen and you should know which you chose.
+
+Multi-region makes all of this harder and most services never need
+it: the cheapest write path and the cheapest read path end up in
+different places, tens of milliseconds apart.`}],
+    points:[
+      `Decide <b>per read path</b>, not globally. A checkout total and a monthly report have nothing in common.`,
+      `Where staleness is visible, show it — a last-updated time — rather than presenting stale data as current.`,
+      `Measure the lag and alert on it. The whole model assumes "eventually" is short, and nothing tells you when it stops being.`,
+      `Read-your-writes removes the anomaly users actually notice, for the cost of a flag in the session.`],
+    trap:`A user updates their name, the page reads from a replica 30ms behind and shows the old one, so
+          they change it again. Nothing is broken and you have a support ticket nobody can reproduce.`,
+    build:`Mark each read path must-be-fresh or may-lag, and check where the must-be-fresh ones actually
+           read from today.`,
+    refs:[] },
+
+  { id:"replication-quorum", name:"Replication and quorum", depth:"understand", core:false,
+    why:`You will not write Raft. You will choose a replication mode, set a replica count, and one day
+         watch a failover — and those decisions have consequences worth understanding.`,
+    code:[{label:"Why clusters have odd numbers", lang:"text", code:`quorum = floor(N / 2) + 1
+
+  N=1   quorum 1   survives 0 failures
+  N=2   quorum 2   survives 0 failures   <- WORSE than one node:
+                                            twice the failure surface,
+                                            no extra tolerance
+  N=3   quorum 2   survives 1
+  N=4   quorum 3   survives 1            <- no gain over 3, more cost
+  N=5   quorum 3   survives 2
+
+Even numbers never buy tolerance, only cost. Hence 3 and 5.
+
+Split-brain is what quorum prevents: a partitioned minority cannot
+form a majority, so it cannot accept writes, so it cannot diverge.`}],
+    points:[
+      `<b>Asynchronous</b> replication commits without waiting, so a failover can lose whatever had not shipped. That number is your real RPO.`,
+      `<b>Synchronous</b> closes the window and makes every write depend on a second machine, so a slow replica becomes a write outage.`,
+      `Most databases offer a middle: require one confirmation out of several replicas, bounding loss without making any single replica critical.`,
+      `Consensus is what you configure and watch — elections, leader changes, the pause during them — not something you implement.`],
+    trap:`Running a two-node cluster for high availability. It cannot form a quorum after losing either
+          node, so it is strictly less available than one node at twice the cost.`,
+    build:`Find out whether your replication is synchronous and how far behind the replica runs. Then
+           trigger a failover in a non-production copy and time how long writes are refused.`,
+    refs:[] },
+
+  { id:"clocks-ordering", name:"Why timestamps lie", depth:"understand", core:false,
+    why:`Clocks on two machines never agree. An event genuinely later than another can carry an earlier
+         timestamp, and nothing detects it.`,
+    code:[{label:"Which clock, and when", lang:"js", code:`// Wrong: a duration from the wall clock. An NTP correction during
+// the request can make this negative, or wildly large.
+const t0 = Date.now();
+await doWork();
+const elapsed = Date.now() - t0;          // can be negative
+
+// Right: the monotonic clock. Unaffected by corrections, and
+// meaningless on another machine — which is fine for a duration.
+const t0 = performance.now();
+await doWork();
+const elapsed = performance.now() - t0;   // always >= 0
+
+// Token expiry is where skew bites: a token issued by a machine two
+// seconds ahead looks not-yet-valid to one behind it.
+jwt.verify(token, key, { clockTolerance: 5 });   // seconds
+
+// Ordering: never compare timestamps from different machines.
+//   wrong:  if (a.updatedAt > b.updatedAt) keep(a)
+//   right:  if (a.version   > b.version)   keep(a)
+// where version comes from ONE authority: a sequence, a row version,
+// or the partition offset from the messaging stage.`}],
+    points:[
+      `<b>Wall clock</b> for recording when something happened, always UTC. <b>Monotonic</b> for every duration, timeout, retry delay and lease.`,
+      `<b>Last-write-wins</b> by timestamp silently discards data in proportion to your clock skew, which you are not measuring.`,
+      `If you must compare across machines, allow a tolerance larger than your worst observed skew and treat anything inside it as unordered.`,
+      `Across services, make one service the owner of each field, or keep both values and resolve in the domain.`],
+    trap:`Two services writing the same record, keeping whichever has the later <code>updated_at</code>,
+          with clocks 80ms apart. The genuinely later write is silently discarded and the record looks
+          perfectly consistent afterwards.`,
+    build:`Find durations measured with the wall clock and convert one. Then find any conflict resolved
+           by comparing timestamps across machines, and measure your actual skew.`,
+    refs:[] }
+
   ] },
 
-{ num:16, id:"capstone", phase:6, name:"Capstone: build the order service",
-  lede:"Not yet rewritten.",
-  custom:`<p>Not yet rewritten.</p>` }
+{ num:16, id:"capstone", phase:6, name:"Capstone: the order service",
+  lede:"One service, eight milestones, each with a check you can actually run.",
+  custom:`<div class="cap">
+
+<h3>The brief</h3>
+<p>A backend for a small shop. A customer places an order, pays for it, and reads their own orders. Staff mark an order shipped. That is the whole feature set, deliberately — the difficulty here is not the domain.</p>
+<p>Node and Express, one Postgres, one Redis, one queue, one object store. Everything else is code you write.</p>
+<p>Three constraints make it the real exercise:</p>
+<ul>
+  <li>A client that retries must not create a second order or take a second payment.</li>
+  <li>Killing the process at any moment must lose no accepted work and leave nothing half-done.</li>
+  <li>With the payment provider down, the service still does everything that does not need it, and says clearly what it cannot do.</li>
+</ul>
+
+<h3>What to leave out</h3>
+<ul>
+  <li><strong>Microservices.</strong> One deployable. You cannot practise boundaries on a domain this small — see the distributed-monolith trap.</li>
+  <li><strong>Kubernetes, until milestone 8.</strong> Compose or a process manager. Orchestration before the service works is displacement activity.</li>
+  <li><strong>Event sourcing and CQRS.</strong> The write model is fine for reading. A projection before you have a slow query is the mistake the read-models topic warns about.</li>
+  <li><strong>Multi-region, sharding, a service mesh.</strong> None has a problem to solve here, and a solution without a problem teaches the wrong instinct.</li>
+  <li><strong>A frontend.</strong> curl and your test suite are the clients.</li>
+</ul>
+
+<h3>The milestones</h3>
+
+<div class="ms">
+  <h4>1. Schema, constraints, first endpoints</h4>
+  <p>Tables for customers, orders and items. Put the rules in the database: not-null, a status check, foreign keys, non-negative money as integer minor units with a currency. Then <code>POST /orders</code> and <code>GET /orders/:id</code> with nothing clever in them.</p>
+  <p class="uses">Exercises: layers and boundaries · times, money and absent values · one fact one place · let the database enforce it · resources and URLs</p>
+  <div class="check"><p><strong>Check.</strong> A test that bypasses your code entirely and inserts a row violating each rule through raw SQL. Every one must be rejected. Anything that succeeds is a rule living only in your application.</p></div>
+</div>
+
+<div class="ms">
+  <h4>2. Validation, errors, and the list endpoint</h4>
+  <p>A strict Zod schema returning every error at once. One error envelope with a stable code and a request id, including for unhandled exceptions. Then <code>GET /orders</code> with keyset pagination and a bounded page size.</p>
+  <p class="uses">Exercises: validation at the boundary · one error shape · pagination that does not duplicate · SQL fluency · indexes</p>
+  <div class="check"><p><strong>Check.</strong> Seed ten thousand orders. Page to the end while a second process inserts at the top, collect every id, and assert no duplicates and nothing skipped. Then do it with <code>OFFSET</code> and count the duplicates.</p></div>
+</div>
+
+<div class="ms">
+  <h4>3. Idempotent creation</h4>
+  <p>Require <code>Idempotency-Key</code>. Claim it with a unique constraint in the same transaction as the order, store the response, replay it on a repeat. Handle all three cases: duplicate after completion, duplicate while still running, same key with a different body.</p>
+  <p class="uses">Exercises: idempotency and safe retries · isolation levels · lost updates · HTTP semantics</p>
+  <div class="check"><p><strong>Check.</strong> Fire the same key twice <em>concurrently</em>. Exactly one order, two identical responses. The sequential version of this test passes against check-then-insert code that is wrong.</p></div>
+</div>
+
+<div class="ms">
+  <h4>4. Auth and tenant-scoped authorization</h4>
+  <p>Sign-up and sign-in with Argon2id, identical responses whether or not the account exists, and a session cookie with all four flags. Then make authorization structural: a repository built with the caller's identity, so a query that forgets the scope cannot be written.</p>
+  <p class="uses">Exercises: sessions and cookie flags · storing credentials · authorizing every object · untrusted input · encryption, PII and logs</p>
+  <div class="check"><p><strong>Check.</strong> As customer A, request every id-taking endpoint with customer B's ids. Every one returns 404. Then assert that posting a password to sign-in produces no log line containing it.</p></div>
+</div>
+
+<div class="ms">
+  <h4>5. Caching the read path</h4>
+  <p>Cache-aside on the order read with a versioned key and a TTL, invalidated on write, wrapped so a Redis failure degrades to a database read. Add an ETag answering 304. Then single-flight so concurrent misses produce one query.</p>
+  <p class="uses">Exercises: cache-aside · keys and TTLs · stampedes · ETags · finding the bottleneck</p>
+  <div class="check"><p><strong>Check.</strong> Three things. Kill Redis and confirm correct results. Delete a hot key, fire two hundred concurrent requests, assert the database saw one query. Update an order and confirm the next read reflects it while an unchanged conditional request returns 304.</p></div>
+</div>
+
+<div class="ms">
+  <h4>6. Payment as a job, with an outbox</h4>
+  <p>Move payment out of the request. Write the order and an outbox row in one transaction; a relay publishes. A worker charges a stubbed provider using the order id as their idempotency key, and dedupes on a processed table in the same transaction as its effect. Bounded retries with jittered backoff, and a dead-letter queue.</p>
+  <p class="uses">Exercises: moving work out of the request · the outbox · surviving a duplicate · retries and dead letters · timeouts and jitter</p>
+  <div class="check"><p><strong>Check.</strong> Kill the worker mid-job, repeatedly, under load. No job lost, nothing charged twice. Then stop the broker entirely, place an order, and confirm the order and its outbox row both committed and the event delivers when it returns.</p></div>
+</div>
+
+<div class="ms">
+  <h4>7. Operating it</h4>
+  <p>A deadline on every outbound call, composed from the request's own. A breaker around the provider with a decided fallback. Structured logs with a request id threaded through the request, the outbox and the worker. The four golden signals with latency as a histogram. Separate probes and a graceful shutdown that drains.</p>
+  <p class="uses">Exercises: timeouts and jitter · breakers and degraded modes · structured logs · metrics and histograms · probes and shutdown · errors you can diagnose</p>
+  <div class="check"><p><strong>Check.</strong> Stub the provider to hang forever. The endpoint returns a degraded response within its own timeout, the breaker opens, and the request id in the response finds the whole story in your logs including the worker. Then SIGTERM during a slow request: the client gets its response, not a reset.</p></div>
+</div>
+
+<div class="ms">
+  <h4>8. Container, pipeline, zero-downtime deploy</h4>
+  <p>Containerise: pinned base, dependencies before source, non-root, exec-form entrypoint. Build one artifact and promote it by digest through a pipeline that tests that artifact. Then the deploy that matters: add a column using expand and contract while the old version still serves traffic.</p>
+  <p class="uses">Exercises: a container that shuts down · build once, promote · release strategies · migrating without downtime · where state leaks · limits and OOMKills</p>
+  <div class="check"><p><strong>Check.</strong> Run a load generator at a steady rate. Perform a rolling deploy and assert zero failed requests. Then run the migration with the previous version still live and confirm it keeps working. If either drops a request, you have found the thing this milestone teaches.</p></div>
+</div>
+
+<div class="closing">
+  <h3>When you are done</h3>
+  <p>Come back and tick what you can now both explain and build. The topics you had to reread while building are the ones worth revisiting, and they will not be the ones you expected.</p>
+  <p>Then take one thing this capstone deliberately excluded, decide whether this service would actually benefit from it, and write down why. That judgement, rather than any single technique, is what the route was for.</p>
+</div>
+
+</div>` }
 ];
 
 /* ------------------------------------------------------------------ *
